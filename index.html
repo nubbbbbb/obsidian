@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CP Technique Graph</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header>
+  <h1>CP Technique Graph</h1>
+  <span>competitive programming · similarity explorer</span>
+</header>
+
+<div class="layout" id="layout">
+
+  <!-- LEFT PANEL: input + controls -->
+  <aside class="panel panel-left" id="panelLeft">
+    <div class="panel-inner">
+      <div class="panel-section">
+        <label>Problem Statement</label>
+        <textarea id="problemInput" placeholder="Paste a competitive programming problem here...
+
+e.g. Given a tree with N nodes, find the maximum XOR path between any two nodes..."></textarea>
+
+        <div class="input-row">
+          <label>Similarity Threshold</label>
+          <input type="range" id="threshold" min="0.1" max="0.99" step="0.01" value="0.7">
+          <span id="thresholdVal">0.70</span>
+        </div>
+
+        <button class="btn btn-primary" id="analyzeBtn" onclick="analyze()">
+          ▶ Analyze &amp; Add Problem
+        </button>
+        <button class="btn btn-secondary btn-bulk" onclick="openBulkModal()">
+          ⊞ Bulk Add Problems
+        </button>
+        <div id="status"></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- GRAPH PANEL -->
+  <main class="graph-panel">
+    <!-- Collapse tabs — always visible on graph edges -->
+    <button class="collapse-btn collapse-btn-left" id="collapseLeft" onclick="togglePanel('left')" title="Toggle left panel">‹</button>
+    <button class="collapse-btn collapse-btn-right" id="collapseRight" onclick="togglePanel('right')" title="Toggle right panel">›</button>
+
+    <div class="empty-graph" id="emptyState">
+      <div class="big">∅</div>
+      <span>Add problems to build the graph</span>
+    </div>
+    <svg id="graph-svg"></svg>
+
+    <div class="graph-controls">
+      <button class="ctrl-btn" title="Zoom in"  onclick="zoomIn()">+</button>
+      <button class="ctrl-btn" title="Zoom out" onclick="zoomOut()">−</button>
+      <button class="ctrl-btn" title="Reset view" onclick="resetZoom()">⌂</button>
+      <button class="ctrl-btn" title="Redraw" onclick="redrawGraph()">↺</button>
+      <button class="ctrl-btn ctrl-btn-derived active" id="derivedToggleBtn" title="Toggle buff/nerf edges" onclick="toggleDerivedEdges()">⇢</button>
+    </div>
+  </main>
+
+  <!-- RIGHT PANEL: problem list -->
+  <aside class="panel panel-right" id="panelRight">
+    <div class="panel-inner">
+      <div class="list-header">
+        <span>Problems in DB</span>
+        <div style="display:flex;align-items:center;gap:0.6rem">
+          <span id="problemCount">0</span>
+          <button class="export-btn" onclick="exportAllProblems()" title="Export all problems as .zip">↓ zip</button>
+        </div>
+      </div>
+      <div class="problems-list" id="problemList"></div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- Tooltip -->
+<div id="tooltip">
+  <div class="tip-id" id="tipId"></div>
+  <div id="tipContent"></div>
+</div>
+
+<!-- Problem drawer (slides up on node click) -->
+<div id="drawerBackdrop" onclick="closeDrawer()"></div>
+<div id="problemDrawer">
+  <div class="drawer-header">
+    <div class="drawer-meta">
+      <span id="drawerProblemId"></span>
+      <span id="drawerDate"></span>
+    </div>
+    <button class="drawer-close" onclick="closeDrawer()">✕</button>
+  </div>
+  <div class="drawer-tags" id="drawerTags"></div>
+  <div class="drawer-actions" id="drawerActions"></div>
+  <div class="drawer-divider"></div>
+  <div class="drawer-body" id="drawerBody"></div>
+</div>
+
+<!-- Modify Result Modal -->
+<div id="modifyModal" class="modify-modal-overlay" onclick="handleModifyOverlayClick(event)">
+  <div class="modify-modal">
+    <div class="modify-modal-header">
+      <span id="modifyModalTitle"></span>
+      <button class="drawer-close" onclick="closeModifyModal()">✕</button>
+    </div>
+    <div class="modify-modal-body" id="modifyModalBody"></div>
+    <div class="modify-modal-footer" id="modifyModalActions"></div>
+  </div>
+</div>
+
+<!-- Bulk Add Modal -->
+<div id="bulkModal" class="modify-modal-overlay" onclick="handleBulkOverlayClick(event)">
+  <div class="modify-modal bulk-modal">
+    <div class="modify-modal-header">
+      <span id="bulkModalTitle">⊞ Bulk Add Problems</span>
+      <button class="drawer-close" onclick="closeBulkModal()">✕</button>
+    </div>
+    <div class="modify-modal-body">
+      <div class="bulk-instructions">
+        Paste multiple problems separated by <code>---</code> on its own line.<br>
+        Each problem will be analyzed sequentially.
+      </div>
+      <textarea id="bulkInput" class="bulk-textarea" placeholder="Problem 1 statement here...
+
+---
+
+Problem 2 statement here...
+
+---
+
+Problem 3 statement here..."></textarea>
+      <div id="bulkProgress" class="bulk-progress" style="display:none">
+        <div class="bulk-progress-bar-wrap">
+          <div class="bulk-progress-bar" id="bulkProgressBar"></div>
+        </div>
+        <div class="bulk-progress-label" id="bulkProgressLabel"></div>
+        <div class="bulk-log" id="bulkLog"></div>
+      </div>
+    </div>
+    <div class="modify-modal-footer" id="bulkModalFooter">
+      <button class="btn btn-secondary" onclick="closeBulkModal()">Cancel</button>
+      <button class="btn btn-primary" id="bulkStartBtn" onclick="startBulkAdd()">▶ Start Processing</button>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
