@@ -700,80 +700,61 @@ async function startBulkAdd() {
 
 // ─── EXPORT AS ZIP ────────────────────────────────────────────────────────────
 
-async function exportAllProblems() {
-  if (db.length === 0) {
-    alert('No problems to export.');
-    return;
-  }
+// ─── SHARED EXPORT HELPER ─────────────────────────────────────────────────────
 
-  const btn = document.querySelector('.export-btn');
-  btn.disabled = true;
-  btn.textContent = '…';
+function buildAdjacency() {
+  const threshold = getThreshold();
+  const adjacency = new Map(db.map(p => [p.id, new Set()]));
+
+  for (let i = 0; i < db.length; i++) {
+    for (let j = i + 1; j < db.length; j++) {
+      const embsA = db[i].tagEmbeddings;
+      const embsB = db[j].tagEmbeddings;
+      const hasEmb = embsA && embsB &&
+                     Object.keys(embsA).length > 0 &&
+                     Object.keys(embsB).length > 0;
+      let sim;
+      if (hasEmb) {
+        sim = softJaccard(embsA, embsB);
+      } else {
+        const tA   = new Set(db[i].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
+        const tB   = new Set(db[j].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
+        const inter = [...tA].filter(t => tB.has(t)).length;
+        const union = new Set([...tA, ...tB]).size;
+        sim = union > 0 ? inter / union : 0;
+      }
+      if (sim >= threshold) {
+        adjacency.get(db[i].id).add(db[j].id);
+        adjacency.get(db[j].id).add(db[i].id);
+      }
+    }
+  }
+  for (const p of db) {
+    if (p.derivedFromId && adjacency.has(p.derivedFromId)) {
+      adjacency.get(p.id).add(p.derivedFromId);
+      adjacency.get(p.derivedFromId).add(p.id);
+    }
+  }
+  return adjacency;
+}
+
+async function exportAllProblems() {
+  if (db.length === 0) { alert('No problems to export.'); return; }
+
+  const btns = document.querySelectorAll('.export-btn');
+  btns.forEach(b => b.disabled = true);
 
   try {
-    const zip = new JSZip();
-    const threshold = getThreshold();
+    const zip       = new JSZip();
+    const adjacency = buildAdjacency();
 
-    // Build adjacency: id → Set of linked ids (similarity edges + derived edges)
-    const adjacency = new Map(db.map(p => [p.id, new Set()]));
-
-    // Similarity edges
-    for (let i = 0; i < db.length; i++) {
-      for (let j = i + 1; j < db.length; j++) {
-        const embsA = db[i].tagEmbeddings;
-        const embsB = db[j].tagEmbeddings;
-        const hasEmb = embsA && embsB &&
-                       Object.keys(embsA).length > 0 &&
-                       Object.keys(embsB).length > 0;
-        let sim;
-        if (hasEmb) {
-          sim = softJaccard(embsA, embsB);
-        } else {
-          const tA = new Set(db[i].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
-          const tB = new Set(db[j].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
-          const inter = [...tA].filter(t => tB.has(t)).length;
-          const union = new Set([...tA, ...tB]).size;
-          sim = union > 0 ? inter / union : 0;
-        }
-        if (sim >= threshold) {
-          adjacency.get(db[i].id).add(db[j].id);
-          adjacency.get(db[j].id).add(db[i].id);
-        }
-      }
-    }
-
-    // Derived edges
     for (const p of db) {
-      if (p.derivedFromId && adjacency.has(p.derivedFromId)) {
-        adjacency.get(p.id).add(p.derivedFromId);
-        adjacency.get(p.derivedFromId).add(p.id);
-      }
-    }
-
-    // Build each .md file
-    for (const p of db) {
-      const tags = p.techniques
-        .split(',').map(t => t.trim()).filter(Boolean);
-
-      // Line 1: tags as `#tag` tokens on one line
+      const tags    = p.techniques.split(',').map(t => t.trim()).filter(Boolean);
       const tagLine = tags.map(t => `\`${t}\``).join(', ');
-
-      // Linked problem wikilinks
-      const links = [...adjacency.get(p.id)]
-        .map(linkedId => `[[${linkedId}]]`)
-        .join('  ');
-
-      const parts = [
-        tagLine,
-        '',
-        p.problemText || '_(no problem text stored)_',
-      ];
-
-      if (links) {
-        parts.push('', '---', '', links);
-      }
-
-      zip.file(`${p.id}.md`, parts.join('\n'));
+      const links   = [...adjacency.get(p.id)].map(id => `[[${id}]]`).join('  ');
+      const parts   = [tagLine, '', p.problemText || '_(no problem text stored)_'];
+      if (links) parts.push('', '---', '', links);
+      zip.file(`problems/${p.id}.md`, parts.join('\n'));
     }
 
     const blob = await zip.generateAsync({ type: 'blob' });
@@ -788,49 +769,36 @@ async function exportAllProblems() {
   } catch (e) {
     alert('Export failed: ' + e.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = '↓ zip';
+    btns.forEach(b => b.disabled = false);
   }
 }
 
 // ─── EXPORT AS OBSIDIAN CANVAS ────────────────────────────────────────────────
 
 function exportCanvas() {
-  if (db.length === 0) {
-    alert('No problems to export.');
-    return;
-  }
+  if (db.length === 0) { alert('No problems to export.'); return; }
 
   const btns = document.querySelectorAll('.export-btn');
   btns.forEach(b => b.disabled = true);
 
   try {
-    const NODE_W    = 200;
-    const NODE_H    = 300;
-    const GAP       = 100;
-    const STEP_X    = NODE_W + GAP;
-    const STEP_Y    = NODE_H + GAP;
+    const NODE_W = 200;
+    const NODE_H = 300;
+    const GAP    = 100;
+    const STEP_X = NODE_W + GAP;
+    const STEP_Y = NODE_H + GAP;
 
-    // ── Spiral grid positions (col, row) outward from (0,0) ──────────────────
-    // Generates positions in a square spiral: center first, then ring by ring.
+    // ── Spiral grid positions ─────────────────────────────────────────────────
     function spiralPositions(n) {
       const pos = [];
       if (n === 0) return pos;
       pos.push([0, 0]);
       let ring = 1;
       while (pos.length < n) {
-        // Top side: row = -ring, col from -ring to +ring
-        for (let c = -ring; c <= ring && pos.length < n; c++)
-          pos.push([c, -ring]);
-        // Right side: col = +ring, row from -ring+1 to +ring
-        for (let r = -ring + 1; r <= ring && pos.length < n; r++)
-          pos.push([ring, r]);
-        // Bottom side: row = +ring, col from +ring-1 to -ring
-        for (let c = ring - 1; c >= -ring && pos.length < n; c--)
-          pos.push([c, ring]);
-        // Left side: col = -ring, row from +ring-1 to -ring+1
-        for (let r = ring - 1; r >= -ring + 1 && pos.length < n; r--)
-          pos.push([-ring, r]);
+        for (let c = -ring; c <= ring  && pos.length < n; c++) pos.push([c, -ring]);
+        for (let r = -ring+1; r <= ring  && pos.length < n; r++) pos.push([ring, r]);
+        for (let c = ring-1; c >= -ring  && pos.length < n; c--) pos.push([c, ring]);
+        for (let r = ring-1; r >= -ring+1 && pos.length < n; r--) pos.push([-ring, r]);
         ring++;
       }
       return pos;
@@ -838,97 +806,53 @@ function exportCanvas() {
 
     const positions = spiralPositions(db.length);
 
-    // Map problem id → canvas node id (short hex string) and pixel position
-    const nodeMap = new Map(); // id → { canvasId, x, y, cx, cy }
     function randomHex(len) {
-      return Array.from({ length: len }, () =>
-        Math.floor(Math.random() * 16).toString(16)).join('');
+      return Array.from({ length: len }, () => Math.floor(Math.random() * 16).toString(16)).join('');
     }
 
+    // id → { canvasId, x, y }
+    const nodeMap = new Map();
     db.forEach((p, i) => {
       const [col, row] = positions[i];
-      const x  = col * STEP_X - NODE_W / 2;   // top-left corner
-      const y  = row * STEP_Y - NODE_H / 2;
-      const cx = x + NODE_W / 2;              // center
-      const cy = y + NODE_H / 2;
-      nodeMap.set(p.id, { canvasId: randomHex(16), x, y, cx, cy });
+      const x = col * STEP_X - NODE_W / 2;
+      const y = row * STEP_Y - NODE_H / 2;
+      nodeMap.set(p.id, { canvasId: randomHex(16), x, y });
     });
 
-    // ── Build adjacency (same logic as exportAllProblems) ────────────────────
-    const threshold = getThreshold();
-    const adjacency = new Map(db.map(p => [p.id, new Set()]));
-
-    for (let i = 0; i < db.length; i++) {
-      for (let j = i + 1; j < db.length; j++) {
-        const embsA = db[i].tagEmbeddings;
-        const embsB = db[j].tagEmbeddings;
-        const hasEmb = embsA && embsB &&
-                       Object.keys(embsA).length > 0 &&
-                       Object.keys(embsB).length > 0;
-        let sim;
-        if (hasEmb) {
-          sim = softJaccard(embsA, embsB);
-        } else {
-          const tA   = new Set(db[i].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
-          const tB   = new Set(db[j].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
-          const inter = [...tA].filter(t => tB.has(t)).length;
-          const union = new Set([...tA, ...tB]).size;
-          sim = union > 0 ? inter / union : 0;
-        }
-        if (sim >= threshold) {
-          adjacency.get(db[i].id).add(db[j].id);
-          adjacency.get(db[j].id).add(db[i].id);
-        }
-      }
-    }
-    for (const p of db) {
-      if (p.derivedFromId && adjacency.has(p.derivedFromId)) {
-        adjacency.get(p.id).add(p.derivedFromId);
-        adjacency.get(p.derivedFromId).add(p.id);
-      }
-    }
-
-    // ── Pick best fromSide/toSide to minimise edge length ────────────────────
+    // ── Best fromSide/toSide ──────────────────────────────────────────────────
     const SIDES = ['top', 'bottom', 'left', 'right'];
 
-    function sideAnchor(nx, ny, side) {
-      // Returns the pixel coordinate of a side's midpoint anchor
-      if (side === 'top')    return { x: nx + NODE_W / 2, y: ny };
-      if (side === 'bottom') return { x: nx + NODE_W / 2, y: ny + NODE_H };
-      if (side === 'left')   return { x: nx,               y: ny + NODE_H / 2 };
-      /* right */            return { x: nx + NODE_W,      y: ny + NODE_H / 2 };
+    function sideAnchor(x, y, side) {
+      if (side === 'top')    return { x: x + NODE_W / 2, y };
+      if (side === 'bottom') return { x: x + NODE_W / 2, y: y + NODE_H };
+      if (side === 'left')   return { x,                  y: y + NODE_H / 2 };
+      /* right */            return { x: x + NODE_W,      y: y + NODE_H / 2 };
     }
 
     function bestSides(aId, bId) {
       const a = nodeMap.get(aId);
       const b = nodeMap.get(bId);
       let best = Infinity, fromSide = 'right', toSide = 'left';
-      for (const fs of SIDES) {
-        for (const ts of SIDES) {
-          const fa = sideAnchor(a.x, a.y, fs);
-          const tb = sideAnchor(b.x, b.y, ts);
-          const d  = Math.hypot(fa.x - tb.x, fa.y - tb.y);
-          if (d < best) { best = d; fromSide = fs; toSide = ts; }
-        }
+      for (const fs of SIDES) for (const ts of SIDES) {
+        const fa = sideAnchor(a.x, a.y, fs);
+        const tb = sideAnchor(b.x, b.y, ts);
+        const d  = Math.hypot(fa.x - tb.x, fa.y - tb.y);
+        if (d < best) { best = d; fromSide = fs; toSide = ts; }
       }
       return { fromSide, toSide };
     }
 
-    // ── Build canvas nodes ────────────────────────────────────────────────────
+    // ── Adjacency ─────────────────────────────────────────────────────────────
+    const adjacency = buildAdjacency();
+
+    // ── Canvas nodes ──────────────────────────────────────────────────────────
     const canvasNodes = db.map(p => {
       const { canvasId, x, y } = nodeMap.get(p.id);
-      return {
-        id:     canvasId,
-        x,
-        y,
-        width:  NODE_W,
-        height: NODE_H,
-        type:   'file',
-        file:   `${p.id}.md`,
-      };
+      return { id: canvasId, x, y, width: NODE_W, height: NODE_H,
+               type: 'file', file: `problems/${p.id}.md` };
     });
 
-    // ── Build canvas edges (two directed edges per undirected pair) ───────────
+    // ── Canvas edges (two directed edges per pair) ────────────────────────────
     const canvasEdges = [];
     const seen = new Set();
 
@@ -938,43 +862,41 @@ function exportCanvas() {
         if (seen.has(pairKey)) continue;
         seen.add(pairKey);
 
-        const { fromSide, toSide } = bestSides(p.id, neighborId);
+        const { fromSide, toSide }   = bestSides(p.id, neighborId);
         const { fromSide: fs2, toSide: ts2 } = bestSides(neighborId, p.id);
-
         const nA = nodeMap.get(p.id);
         const nB = nodeMap.get(neighborId);
 
-        // Edge A → B
-        canvasEdges.push({
-          id:       randomHex(16),
-          fromNode: nA.canvasId,
-          fromSide,
-          toNode:   nB.canvasId,
-          toSide,
-        });
-        // Edge B → A
-        canvasEdges.push({
-          id:       randomHex(16),
-          fromNode: nB.canvasId,
-          fromSide: fs2,
-          toNode:   nA.canvasId,
-          toSide:   ts2,
-        });
+        canvasEdges.push({ id: randomHex(16), fromNode: nA.canvasId, fromSide,  toNode: nB.canvasId, toSide  });
+        canvasEdges.push({ id: randomHex(16), fromNode: nB.canvasId, fromSide: fs2, toNode: nA.canvasId, toSide: ts2 });
       }
     }
 
-    // ── Serialise and download ────────────────────────────────────────────────
+    // ── Build zip: problems/*.md + graph.canvas ───────────────────────────────
+    const zip = new JSZip();
+
+    for (const p of db) {
+      const tags    = p.techniques.split(',').map(t => t.trim()).filter(Boolean);
+      const tagLine = tags.map(t => `\`${t}\``).join(', ');
+      const links   = [...adjacency.get(p.id)].map(id => `[[${id}]]`).join('  ');
+      const parts   = [tagLine, '', p.problemText || '_(no problem text stored)_'];
+      if (links) parts.push('', '---', '', links);
+      zip.file(`problems/${p.id}.md`, parts.join('\n'));
+    }
+
     const canvas = { nodes: canvasNodes, edges: canvasEdges };
-    const json   = JSON.stringify(canvas, null, '\t');
-    const blob   = new Blob([json], { type: 'application/json' });
-    const url    = URL.createObjectURL(blob);
-    const a      = document.createElement('a');
-    a.href       = url;
-    a.download   = 'graph.canvas';
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    zip.file('graph.canvas', JSON.stringify(canvas, null, '\t'));
+
+    zip.generateAsync({ type: 'blob' }).then(blob => {
+      const url = URL.createObjectURL(blob);
+      const a   = document.createElement('a');
+      a.href    = url;
+      a.download = `cp_graph_${Date.now()}.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    });
 
   } catch (e) {
     alert('Canvas export failed: ' + e.message);
