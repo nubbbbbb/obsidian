@@ -38,19 +38,19 @@ function setStatus(msg, isError = false) {
 // ─── API CALLS ────────────────────────────────────────────────────────────────
 
 /**
- * POST /api/extract
+ * POST /api/analyze
  * Body:  { problem: string }
- * Reply: { techniques: string }  (comma-separated)
+ * Reply: { techniques: string, summary: string }
  */
-async function extractTechniques(problemText) {
-  const res  = await fetch(`${API_BASE}/api/extract`, {
+async function analyzeProblem(problemText) {
+  const res  = await fetch(`${API_BASE}/api/analyze`, {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body:    JSON.stringify({ problem: problemText }),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data.techniques;
+  return { techniques: data.techniques, summary: data.summary };
 }
 
 /**
@@ -77,32 +77,6 @@ async function embedTags(tags) {
  * Body:  { problem: string, mode: "buff" | "nerf" }
  * Reply: { result: string }
  */
-async function modifyProblem(problemText, mode) {
-  const res  = await fetch(`${API_BASE}/api/modify`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ problem: problemText, mode }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data.result;
-}
-
-/**
- * POST /api/summarize
- * Body:  { problem: string }
- * Reply: { summary: string }  (markdown: constraint tags line + paragraph)
- */
-async function summarizeProblem(problemText) {
-  const res  = await fetch(`${API_BASE}/api/summarize`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify({ problem: problemText }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data.summary;
-}
 
 // ─── SIMILARITY: SOFT JACCARD WITH PER-TAG EMBEDDINGS ────────────────────────
 //
@@ -159,14 +133,13 @@ async function analyze(derivedFromId = null) {
   btn.disabled = true;
 
   try {
-    // 1. Extract technique tags via LLM
-    setStatus('<span class="spinner"></span>Extracting techniques…');
-    const techniques = await extractTechniques(text);
+    // 1. Extract techniques + summary in one request
+    setStatus('<span class="spinner"></span>Analyzing…');
+    const { techniques, summary } = await analyzeProblem(text);
     if (!techniques) throw new Error('No techniques extracted.');
 
-    // 2. Parse tags and embed each one individually
+    // 2. Embed tags
     const tags = techniques.split(',').map(t => t.trim()).filter(Boolean);
-
     setStatus(`<span class="spinner"></span>Embedding ${tags.length} tag${tags.length !== 1 ? 's' : ''}…`);
     let tagEmbeddings = {};
     try {
@@ -177,7 +150,7 @@ async function analyze(derivedFromId = null) {
 
     // 3. Persist
     const id    = Date.now();
-    const entry = { id, techniques, tagEmbeddings, problemText: text, addedAt: new Date().toISOString(), derivedFromId: derivedFromId || null };
+    const entry = { id, techniques, tagEmbeddings, summary, problemText: summary || text, addedAt: new Date().toISOString(), derivedFromId: derivedFromId || null };
     db.push(entry);
     saveDB(db);
 
@@ -243,9 +216,14 @@ function deleteProblem(e, id) {
 }
 
 function highlightNode(id) {
-  highlightedId = (highlightedId === id) ? null : id;
-  renderList();
-  d3.selectAll('.node').classed('highlighted', d => d.id === highlightedId);
+  if (highlightedId === id) {
+    // Second click on the same problem → open drawer (same as clicking the node)
+    openDrawer(id);
+  } else {
+    highlightedId = id;
+    renderList();
+    d3.selectAll('.node').classed('highlighted', d => d.id === highlightedId);
+  }
 }
 
 // ─── D3 FORCE GRAPH ───────────────────────────────────────────────────────────
@@ -428,28 +406,11 @@ function openDrawer(id) {
     problem.techniques.split(',')
       .map(t => `<span class="technique-tag">${t.trim()}</span>`).join('');
 
-  // Summary area — show cached or trigger fetch
+  // Summary — always present since it's fetched at add-time
   const bodyEl = document.getElementById('drawerBody');
-  if (problem.summary) {
-    bodyEl.innerHTML = renderMarkdownSummary(problem.summary);
-  } else {
-    bodyEl.innerHTML = `<span class="summary-loading"><span class="spinner"></span>Summarising…</span>`;
-    summarizeProblem(problem.problemText)
-      .then(summary => {
-        // Cache on the entry
-        const entry = db.find(p => p.id === id);
-        if (entry) { entry.summary = summary; saveDB(db); }
-        // Only update if drawer is still showing this problem
-        if (document.getElementById('drawerProblemId').textContent === `Problem #${id}`) {
-          bodyEl.innerHTML = renderMarkdownSummary(summary);
-        }
-      })
-      .catch(err => {
-        if (document.getElementById('drawerProblemId').textContent === `Problem #${id}`) {
-          bodyEl.innerHTML = `<span style="color:var(--accent2);font-size:0.72rem">⚠ Summary failed: ${escapeHtml(err.message)}</span>`;
-        }
-      });
-  }
+  bodyEl.innerHTML = problem.summary
+    ? renderMarkdownSummary(problem.summary)
+    : `<span style="color:var(--muted);font-size:0.72rem">No summary available.</span>`;
 
   document.getElementById('drawerActions').innerHTML = `
     <button class="drawer-action-btn buff-btn" onclick="triggerModify(${id}, 'buff')">
@@ -684,11 +645,11 @@ async function startBulkAdd() {
     const snippet = problems[i].slice(0, 60).replace(/\n/g, ' ') + (problems[i].length > 60 ? '…' : '');
 
     try {
-      // 1. Extract
-      const techniques = await extractTechniques(problems[i]);
+      // 1. Analyze (techniques + summary in one request)
+      const { techniques, summary } = await analyzeProblem(problems[i]);
       if (!techniques) throw new Error('No techniques returned');
 
-      // 2. Embed
+      // 2. Embed tags
       const tags = techniques.split(',').map(t => t.trim()).filter(Boolean);
       let tagEmbeddings = {};
       try {
@@ -703,7 +664,8 @@ async function startBulkAdd() {
         id,
         techniques,
         tagEmbeddings,
-        problemText: problems[i],
+        summary,
+        problemText: summary || problems[i],
         addedAt: new Date().toISOString(),
         derivedFromId: null,
       };
@@ -828,5 +790,195 @@ async function exportAllProblems() {
   } finally {
     btn.disabled = false;
     btn.textContent = '↓ zip';
+  }
+}
+
+// ─── EXPORT AS OBSIDIAN CANVAS ────────────────────────────────────────────────
+
+function exportCanvas() {
+  if (db.length === 0) {
+    alert('No problems to export.');
+    return;
+  }
+
+  const btns = document.querySelectorAll('.export-btn');
+  btns.forEach(b => b.disabled = true);
+
+  try {
+    const NODE_W    = 200;
+    const NODE_H    = 300;
+    const GAP       = 100;
+    const STEP_X    = NODE_W + GAP;
+    const STEP_Y    = NODE_H + GAP;
+
+    // ── Spiral grid positions (col, row) outward from (0,0) ──────────────────
+    // Generates positions in a square spiral: center first, then ring by ring.
+    function spiralPositions(n) {
+      const pos = [];
+      if (n === 0) return pos;
+      pos.push([0, 0]);
+      let ring = 1;
+      while (pos.length < n) {
+        // Top side: row = -ring, col from -ring to +ring
+        for (let c = -ring; c <= ring && pos.length < n; c++)
+          pos.push([c, -ring]);
+        // Right side: col = +ring, row from -ring+1 to +ring
+        for (let r = -ring + 1; r <= ring && pos.length < n; r++)
+          pos.push([ring, r]);
+        // Bottom side: row = +ring, col from +ring-1 to -ring
+        for (let c = ring - 1; c >= -ring && pos.length < n; c--)
+          pos.push([c, ring]);
+        // Left side: col = -ring, row from +ring-1 to -ring+1
+        for (let r = ring - 1; r >= -ring + 1 && pos.length < n; r--)
+          pos.push([-ring, r]);
+        ring++;
+      }
+      return pos;
+    }
+
+    const positions = spiralPositions(db.length);
+
+    // Map problem id → canvas node id (short hex string) and pixel position
+    const nodeMap = new Map(); // id → { canvasId, x, y, cx, cy }
+    function randomHex(len) {
+      return Array.from({ length: len }, () =>
+        Math.floor(Math.random() * 16).toString(16)).join('');
+    }
+
+    db.forEach((p, i) => {
+      const [col, row] = positions[i];
+      const x  = col * STEP_X - NODE_W / 2;   // top-left corner
+      const y  = row * STEP_Y - NODE_H / 2;
+      const cx = x + NODE_W / 2;              // center
+      const cy = y + NODE_H / 2;
+      nodeMap.set(p.id, { canvasId: randomHex(16), x, y, cx, cy });
+    });
+
+    // ── Build adjacency (same logic as exportAllProblems) ────────────────────
+    const threshold = getThreshold();
+    const adjacency = new Map(db.map(p => [p.id, new Set()]));
+
+    for (let i = 0; i < db.length; i++) {
+      for (let j = i + 1; j < db.length; j++) {
+        const embsA = db[i].tagEmbeddings;
+        const embsB = db[j].tagEmbeddings;
+        const hasEmb = embsA && embsB &&
+                       Object.keys(embsA).length > 0 &&
+                       Object.keys(embsB).length > 0;
+        let sim;
+        if (hasEmb) {
+          sim = softJaccard(embsA, embsB);
+        } else {
+          const tA   = new Set(db[i].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
+          const tB   = new Set(db[j].techniques.split(',').map(t => t.trim().toLowerCase()).filter(Boolean));
+          const inter = [...tA].filter(t => tB.has(t)).length;
+          const union = new Set([...tA, ...tB]).size;
+          sim = union > 0 ? inter / union : 0;
+        }
+        if (sim >= threshold) {
+          adjacency.get(db[i].id).add(db[j].id);
+          adjacency.get(db[j].id).add(db[i].id);
+        }
+      }
+    }
+    for (const p of db) {
+      if (p.derivedFromId && adjacency.has(p.derivedFromId)) {
+        adjacency.get(p.id).add(p.derivedFromId);
+        adjacency.get(p.derivedFromId).add(p.id);
+      }
+    }
+
+    // ── Pick best fromSide/toSide to minimise edge length ────────────────────
+    const SIDES = ['top', 'bottom', 'left', 'right'];
+
+    function sideAnchor(nx, ny, side) {
+      // Returns the pixel coordinate of a side's midpoint anchor
+      if (side === 'top')    return { x: nx + NODE_W / 2, y: ny };
+      if (side === 'bottom') return { x: nx + NODE_W / 2, y: ny + NODE_H };
+      if (side === 'left')   return { x: nx,               y: ny + NODE_H / 2 };
+      /* right */            return { x: nx + NODE_W,      y: ny + NODE_H / 2 };
+    }
+
+    function bestSides(aId, bId) {
+      const a = nodeMap.get(aId);
+      const b = nodeMap.get(bId);
+      let best = Infinity, fromSide = 'right', toSide = 'left';
+      for (const fs of SIDES) {
+        for (const ts of SIDES) {
+          const fa = sideAnchor(a.x, a.y, fs);
+          const tb = sideAnchor(b.x, b.y, ts);
+          const d  = Math.hypot(fa.x - tb.x, fa.y - tb.y);
+          if (d < best) { best = d; fromSide = fs; toSide = ts; }
+        }
+      }
+      return { fromSide, toSide };
+    }
+
+    // ── Build canvas nodes ────────────────────────────────────────────────────
+    const canvasNodes = db.map(p => {
+      const { canvasId, x, y } = nodeMap.get(p.id);
+      return {
+        id:     canvasId,
+        x,
+        y,
+        width:  NODE_W,
+        height: NODE_H,
+        type:   'file',
+        file:   `${p.id}.md`,
+      };
+    });
+
+    // ── Build canvas edges (two directed edges per undirected pair) ───────────
+    const canvasEdges = [];
+    const seen = new Set();
+
+    for (const p of db) {
+      for (const neighborId of adjacency.get(p.id)) {
+        const pairKey = [p.id, neighborId].sort().join('-');
+        if (seen.has(pairKey)) continue;
+        seen.add(pairKey);
+
+        const { fromSide, toSide } = bestSides(p.id, neighborId);
+        const { fromSide: fs2, toSide: ts2 } = bestSides(neighborId, p.id);
+
+        const nA = nodeMap.get(p.id);
+        const nB = nodeMap.get(neighborId);
+
+        // Edge A → B
+        canvasEdges.push({
+          id:       randomHex(16),
+          fromNode: nA.canvasId,
+          fromSide,
+          toNode:   nB.canvasId,
+          toSide,
+        });
+        // Edge B → A
+        canvasEdges.push({
+          id:       randomHex(16),
+          fromNode: nB.canvasId,
+          fromSide: fs2,
+          toNode:   nA.canvasId,
+          toSide:   ts2,
+        });
+      }
+    }
+
+    // ── Serialise and download ────────────────────────────────────────────────
+    const canvas = { nodes: canvasNodes, edges: canvasEdges };
+    const json   = JSON.stringify(canvas, null, '\t');
+    const blob   = new Blob([json], { type: 'application/json' });
+    const url    = URL.createObjectURL(blob);
+    const a      = document.createElement('a');
+    a.href       = url;
+    a.download   = 'graph.canvas';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+  } catch (e) {
+    alert('Canvas export failed: ' + e.message);
+  } finally {
+    btns.forEach(b => b.disabled = false);
   }
 }

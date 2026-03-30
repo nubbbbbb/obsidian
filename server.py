@@ -39,13 +39,16 @@ def index():
     return app.send_static_file("index.html")
 
 
-# ── /api/extract ──────────────────────────────────────────────────────────────
-@app.route("/api/extract", methods=["POST"])
-def extract():
+# ── /api/analyze ──────────────────────────────────────────────────────────────
+@app.route("/api/analyze", methods=["POST"])
+def analyze():
     """
-    Extract algorithmic techniques from a competitive-programming problem.
-    Uses the model specified by LLM_MODEL in .env.
-    Returns { techniques: str }  (comma-separated specific technique names).
+    Single prompt that returns both technique tags and a markdown summary.
+
+    Body:  { problem: str }
+    Reply: { techniques: str, summary: str }
+      - techniques: comma-separated specific algorithm technique names
+      - summary:    constraint-tags line (bold markdown) + blank line + paragraph
     """
     body    = request.get_json(silent=True) or {}
     problem = (body.get("problem") or "").strip()
@@ -57,112 +60,74 @@ def extract():
 
     prompt = (
         "You are a competitive programming expert. "
-        "Analyze the following problem and identify the specific algorithmic techniques required to solve it.\n\n"
-        "Rules:\n"
-        "- Only include REAL competitive programming techniques that are non-trivial and problem-specific.\n"
-        "- ALWAYS use the most specific variant of a technique - never output a bare category name. "
-        "Qualify every technique to its exact subtype. Examples of required specificity:\n"
-        "  * DP must be qualified: 2D DP, bitmask DP, digit DP, interval DP, knapsack DP, "
+        "Analyze the problem below and produce TWO sections separated by exactly '---'.\n\n"
+
+        "SECTION 1 — Techniques:\n"
+        "Output a single comma-separated list of the specific algorithmic techniques "
+        "required to solve this problem. Rules:\n"
+        "- Only REAL, non-trivial, problem-specific CP techniques.\n"
+        "- Always use the most specific subtype — never a bare category name:\n"
+        "  DP subtypes: 2D DP, bitmask DP, digit DP, interval DP, knapsack DP, "
         "DP on trees, DP on DAG, DP with monotone deque, broken profile DP, "
         "DP with divide and conquer optimization, DP with convex hull trick.\n"
-        "  * Graph traversal must be qualified: multi-source BFS, 0-1 BFS, BFS on grid, "
+        "  Graph subtypes: multi-source BFS, 0-1 BFS, BFS on grid, "
         "Dijkstra on implicit graph, Bellman-Ford, Floyd-Warshall, SCC (Tarjan), "
         "SCC (Kosaraju), bipartite matching, topological sort, Euler path/circuit.\n"
-        "  * Segment tree must be qualified: segment tree with lazy propagation, "
+        "  Segment tree subtypes: segment tree with lazy propagation, "
         "persistent segment tree, segment tree beats, merge sort tree, 2D segment tree.\n"
-        "  * Binary search must be qualified: binary search on answer, "
+        "  Binary search subtypes: binary search on answer, "
         "binary search on floating point, parallel binary search.\n"
-        "  * Greedy must be qualified: greedy with sorting, greedy with priority queue, "
+        "  Greedy subtypes: greedy with sorting, greedy with priority queue, "
         "exchange argument greedy.\n"
-        "  * String algorithms must be specific: KMP, Z-algorithm, Aho-Corasick, "
-        "suffix array, suffix automaton, rolling hash.\n"
-        "  * Tree techniques must be specific: LCA with binary lifting, LCA with Euler tour, "
-        "HLD (heavy-light decomposition), centroid decomposition, "
+        "  Strings: KMP, Z-algorithm, Aho-Corasick, suffix array, suffix automaton, rolling hash.\n"
+        "  Trees: LCA with binary lifting, LCA with Euler tour, HLD, centroid decomposition, "
         "small-to-large merging, DSU on tree.\n"
-        "  * Math must be specific: matrix exponentiation, inclusion-exclusion, "
-        "Mobius inversion, Euler totient, Lucas theorem, NTT, FFT, Gaussian elimination.\n"
-        "  * Other fine-grained examples: two pointers, sliding window, prefix sum, "
-        "difference array, sparse table (RMQ), union-find (DSU), "
-        "binary indexed tree (Fenwick tree), Mo's algorithm, "
-        "sqrt decomposition, offline processing, coordinate compression, hashing.\n"
-        "- Do NOT output bare category names like 'dynamic programming', 'graph', "
-        "'segment tree', 'binary search', or 'greedy' alone - always add the subtype.\n"
-        "- Do NOT include generic constructs: no 'recursion', 'iteration', 'loops', "
-        "'arrays', 'sorting' (unless sorting IS the key insight), "
-        "'input parsing', 'brute force', or 'simulation' "
-        "(unless simulation is the deliberate intended solution).\n"
-        "- Omit sub-steps that are not independently noteworthy "
-        "(e.g. do not list 'sorting' if it merely precedes a binary search on answer).\n\n"
-        "Output ONLY a comma-separated list of specific technique names, nothing else.\n\n"
+        "  Math: matrix exponentiation, inclusion-exclusion, Mobius inversion, "
+        "Euler totient, Lucas theorem, NTT, FFT, Gaussian elimination.\n"
+        "  Other: two pointers, sliding window, prefix sum, difference array, "
+        "sparse table (RMQ), union-find (DSU), binary indexed tree (Fenwick tree), "
+        "Mo's algorithm, sqrt decomposition, offline processing, "
+        "coordinate compression, hashing.\n"
+        "- Do NOT output bare names like 'dynamic programming', 'graph', "
+        "'segment tree', 'binary search', or 'greedy' alone.\n"
+        "- Do NOT include: recursion, iteration, loops, arrays, sorting (unless it IS "
+        "the key insight), input parsing, brute force, simulation (unless deliberate).\n"
+        "- Omit sub-steps that are not independently noteworthy.\n\n"
+
+        "SECTION 2 — Summary:\n"
+        "A concise markdown summary in EXACTLY this format:\n"
+        "  Line 1: key numeric constraints and input type as bold inline tags, "
+        "comma-separated. Example: **N ≤ 2×10⁵**, **Q ≤ 10⁵**, **weighted tree**, **1 ≤ w ≤ 10⁹**\n"
+        "  Blank line.\n"
+        "  One markdown paragraph (3–6 sentences): what the problem asks, "
+        "the key structural difficulty, and the binding constraints. "
+        "Use inline code for variable names. Do NOT name algorithms or solution approaches.\n\n"
+
+        "Output format — EXACTLY:\n"
+        "<comma-separated techniques>\n"
+        "---\n"
+        "<summary>\n\n"
         f"Problem:\n{problem}"
     )
 
     url     = f"{GEMINI_BASE}/models/{LLM_MODEL}:generateContent?key={GOOGLE_API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 200},
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 600},
     }
 
     try:
-        resp = requests.post(url, json=payload, timeout=30)
+        resp = requests.post(url, json=payload, timeout=40)
         resp.raise_for_status()
-        data       = resp.json()
-        techniques = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return jsonify({"techniques": techniques})
-    except requests.HTTPError:
-        return jsonify({"error": _gemini_error(resp)}), 502
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        data = resp.json()
+        raw  = data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
+        # Split on the first '---' separator
+        parts      = raw.split("---", 1)
+        techniques = parts[0].strip()
+        summary    = parts[1].strip() if len(parts) > 1 else ""
 
-# ── /api/summarize ────────────────────────────────────────────────────────────
-@app.route("/api/summarize", methods=["POST"])
-def summarize():
-    """
-    Summarize a competitive-programming problem into compact markdown.
-
-    Body:  { problem: str }
-    Reply: { summary: str }
-      - One-line tags header (bold, comma-separated key constraints/numbers)
-        followed by a short markdown summary covering problem type, constraints,
-        and what makes it non-trivial. No preamble, no title.
-    """
-    body    = request.get_json(silent=True) or {}
-    problem = (body.get("problem") or "").strip()
-
-    if not problem:
-        return jsonify({"error": "Missing 'problem' field"}), 400
-    if not GOOGLE_API_KEY:
-        return jsonify({"error": "GOOGLE_API_KEY not configured on server"}), 500
-
-    prompt = (
-        "You are a competitive programming assistant. "
-        "Given the problem below, produce a concise markdown summary.\n\n"
-        "Format — output EXACTLY these two sections, nothing else:\n\n"
-        "Line 1: A single line of the key numeric constraints and input type, "
-        "formatted as bold inline tags separated by commas. "
-        "Example: `**N ≤ 2×10⁵**, **Q ≤ 10⁵**, **weighted tree**, **1 ≤ w ≤ 10⁹**`\n\n"
-        "Then a blank line.\n\n"
-        "Then a short markdown paragraph (3–6 sentences) summarising: "
-        "what the problem asks, the key structural insight or difficulty, "
-        "and the binding constraints. "
-        "Use inline code for variable names (e.g. `N`, `K`). "
-        "Do NOT mention algorithm names or solution approaches.\n\n"
-        f"Problem:\n{problem}"
-    )
-
-    url     = f"{GEMINI_BASE}/models/{LLM_MODEL}:generateContent?key={GOOGLE_API_KEY}"
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 350},
-    }
-
-    try:
-        resp = requests.post(url, json=payload, timeout=30)
-        resp.raise_for_status()
-        data    = resp.json()
-        summary = data["candidates"][0]["content"]["parts"][0]["text"].strip()
-        return jsonify({"summary": summary})
+        return jsonify({"techniques": techniques, "summary": summary})
     except requests.HTTPError:
         return jsonify({"error": _gemini_error(resp)}), 502
     except Exception as e:
