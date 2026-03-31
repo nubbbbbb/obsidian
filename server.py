@@ -61,15 +61,16 @@ def analyze():
     prompt = (
         "You are a competitive programming expert. "
         "Analyze the problem and output EXACTLY 5 lines, no labels, no preamble.\n\n"
+        "Wrap every mathematical expression, variable, or Big-O term in dollar signs, e.g. $O(N \\log N)$, $N$, $K$, $O(N \\sqrt{N})$.\n\n"
         "Line 1: comma-separated specific CP techniques (e.g. 'Bitmask DP, Binary Search on Answer', not bare 'DP' or 'Graph'). "
         "Never include trivial implementation details: no recursion, iteration, loops, arrays, sorting (unless it is the key insight), input parsing, brute force, or simulation. "
         "Each technique must use its single canonical name — no alternatives or parenthetical aliases (e.g. 'DSU', not 'Union-Find (DSU)' or 'Union-Find'; 'Fenwick Tree', not 'BIT' or 'Binary Indexed Tree'). "
         "Capitalize each technique in title case (e.g. 'Segment Tree with Lazy Propagation', 'Binary Search on Answer', 'DSU on Tree').\n"
-        "Line 2: tightest Big-O time complexity an accepted solution must meet (e.g. O(N log N)).\n"
-        "Line 3: tightest Big-O space complexity (e.g. O(N)).\n"
+        "Line 2: tightest Big-O time complexity an accepted solution must meet (e.g. $O(N \\log N)$).\n"
+        "Line 3: tightest Big-O space complexity (e.g. $O(N)$).\n"
         "Line 4: any non-obvious special constraints (online queries, overflow risk, etc.) — or exactly 'None'.\n"
         "Line 5: one sentence — what is given, what operations exist, what the goal is. "
-        "Example: 'Given an array of N integers, find the subarray with the largest sum.'\n\n"
+        "Example: 'Given an array of $N$ integers, find the subarray with the largest sum.'\n\n"
         f"Problem:\n{problem}"
     )
 

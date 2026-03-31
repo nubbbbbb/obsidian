@@ -8,7 +8,16 @@ const API_BASE = '';  // same-origin; change to 'http://localhost:5000' if neede
 const DB_KEY = 'cp_problems_v3';
 
 function loadDB() {
-  try { return JSON.parse(localStorage.getItem(DB_KEY)) || []; }
+  try {
+    const data = JSON.parse(localStorage.getItem(DB_KEY)) || [];
+    // Migrate old entries that predate constraint fields
+    return data.map(p => ({
+      timeComplex:  '',
+      spaceComplex: '',
+      special:      'None',
+      ...p,
+    }));
+  }
   catch { return []; }
 }
 function saveDB(data) {
@@ -19,9 +28,20 @@ let db = loadDB();
 
 // ─── DOM READY ────────────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {
-  document.getElementById('threshold').addEventListener('input', (e) => {
-    document.getElementById('thresholdVal').textContent =
-      parseFloat(e.target.value).toFixed(2);
+  const slider = document.getElementById('threshold');
+
+  // Restore saved threshold
+  const savedThreshold = localStorage.getItem('cp_threshold');
+  if (savedThreshold !== null) {
+    slider.value = savedThreshold;
+  }
+  document.getElementById('thresholdVal').textContent =
+    parseFloat(slider.value).toFixed(2);
+
+  slider.addEventListener('input', (e) => {
+    const val = parseFloat(e.target.value).toFixed(2);
+    document.getElementById('thresholdVal').textContent = val;
+    localStorage.setItem('cp_threshold', e.target.value);
     updateLinks();
   });
   renderList();
@@ -38,8 +58,9 @@ function getNoEdgeStr()    { return 0.002; }
 // Short-range repulsion: pushes nodes apart only within repelRadius, falls off linearly.
 // Unconnected distant nodes feel nothing — no global drift.
 function forceShortRepel() {
-  let nodes, radius = 120, strength = 1;
+  let nodes, radius = 120, strength = 1, _tick = 0;
   function force() {
+    if (++_tick % 3 !== 0) return;
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i], b = nodes[j];
@@ -62,8 +83,9 @@ function forceShortRepel() {
 // toward `restLen`. Repels when too close, attracts when too far — keeps
 // unconnected nodes at a comfortable, adjustable spread.
 function forceNonEdgeSpring() {
-  let nodes, edgeSet = new Set(), restLen = 280, strength = 0.008;
+  let nodes, edgeSet = new Set(), restLen = 280, strength = 0.008, _tick = 0;
   function force() {
+    if (++_tick % 3 !== 0) return;
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i], b = nodes[j];
@@ -106,7 +128,7 @@ async function analyzeProblem(problemText) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return { techniques: data.techniques, summary: data.summary };
+  return { techniques: data.techniques, summary: data.summary, timeComplex: data.timeComplex, spaceComplex: data.spaceComplex, special: data.special };
 }
 
 /**
@@ -191,7 +213,7 @@ async function analyze(derivedFromId = null) {
   try {
     // 1. Extract techniques + summary in one request
     setStatus('<span class="spinner"></span>Analyzing…');
-    const { techniques, summary } = await analyzeProblem(text);
+    const { techniques, summary, timeComplex, spaceComplex, special } = await analyzeProblem(text);
     if (!techniques) throw new Error('No techniques extracted.');
 
     // 2. Embed tags
@@ -206,7 +228,7 @@ async function analyze(derivedFromId = null) {
 
     // 3. Persist
     const id    = Date.now();
-    const entry = { id, techniques, tagEmbeddings, summary, problemText: summary || text, addedAt: new Date().toISOString(), derivedFromId: derivedFromId || null };
+    const entry = { id, techniques, tagEmbeddings, summary, timeComplex: timeComplex || '', spaceComplex: spaceComplex || '', special: special || 'None', problemText: summary || text, addedAt: new Date().toISOString(), derivedFromId: derivedFromId || null };
     db.push(entry);
     saveDB(db);
 
@@ -431,6 +453,7 @@ function redrawGraph() {
 
   simulation = d3.forceSimulation(nodes)
     .alpha(0.3)
+    .alphaMin(0)
     .alphaDecay(0.02)
     .velocityDecay(0.4)
     .force('link',      d3.forceLink(links).id(d => d.id)
@@ -541,6 +564,16 @@ function openDrawer(id) {
     problem.techniques.split(',')
       .map(t => `<span class="technique-tag">${t.trim()}</span>`).join('');
 
+  // Complexity metadata — remove any previously injected block first
+  document.querySelector('.drawer-constraints')?.remove();
+  const constraintsHtml = `
+    <div class="drawer-constraints">
+      <div class="constraint-row"><span class="constraint-label">Time complexity</span><span class="constraint-value">${stripDollar(problem.timeComplex || 'N/A')}</span></div>
+      <div class="constraint-row"><span class="constraint-label">Space complexity</span><span class="constraint-value">${stripDollar(problem.spaceComplex || 'N/A')}</span></div>
+      <div class="constraint-row"><span class="constraint-label">Additional constraints</span><span class="constraint-value ${problem.special && problem.special !== 'None' ? 'constraint-value-special' : ''}">${stripDollar(problem.special && problem.special !== 'None' ? problem.special : 'None')}</span></div>
+    </div>`;
+  document.getElementById('drawerTags').insertAdjacentHTML('afterend', constraintsHtml);
+
   // Summary — always present since it's fetched at add-time
   const bodyEl = document.getElementById('drawerBody');
   bodyEl.innerHTML = problem.summary
@@ -564,19 +597,63 @@ function openDrawer(id) {
   d3.selectAll('.node').classed('highlighted', d => d.id === highlightedId);
 }
 
-/** Minimal markdown → HTML renderer for the summary (bold, inline code, paragraphs) */
+/** Strip $...$ delimiters for web display (kept in exports). */
+function stripDollar(s) {
+  return s.replace(/\$([^$]+)\$/g, '$1');
+}
+
+/** Markdown → HTML renderer: headings, bullets, numbered lists, bold, code, paragraphs */
 function renderMarkdownSummary(md) {
-  return md
-    .split(/\n\n+/)
-    .map(block => {
-      const html = block
-        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/`(.+?)`/g, '<code class="md-code">$1</code>')
-        .replace(/\n/g, '<br>');
-      return `<p class="summary-para">${html}</p>`;
-    })
-    .join('');
+  if (!md) return '';
+  function escBase(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+  function inlineFormat(s) {
+    return escBase(stripDollar(s))
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,   '<em>$1</em>')
+      .replace(/`(.+?)`/g,     '<code class="md-code">$1</code>');
+  }
+  const lines  = md.split(/\r?\n/);
+  const out    = [];
+  let listType = null;
+  let listBuf  = [];
+  function flushList() {
+    if (!listType) return;
+    out.push(`<${listType} class="md-list">${listBuf.join('')}</${listType}>`);
+    listType = null;
+    listBuf  = [];
+  }
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    if (!line.trim()) { flushList(); continue; }
+    const hMatch = line.match(/^(#{1,6})\s+(.+)/);
+    if (hMatch) {
+      flushList();
+      const level = Math.min(hMatch[1].length + 2, 6);
+      out.push(`<h${level} class="md-h">${inlineFormat(hMatch[2])}</h${level}>`);
+      continue;
+    }
+    const ulMatch = line.match(/^[\-\*\+]\s+(.*)/);
+    if (ulMatch) {
+      if (listType === 'ol') flushList();
+      listType = 'ul';
+      listBuf.push(`<li>${inlineFormat(ulMatch[1])}</li>`);
+      continue;
+    }
+    const olMatch = line.match(/^\d+\.\s+(.*)/);
+    if (olMatch) {
+      if (listType === 'ul') flushList();
+      listType = 'ol';
+      listBuf.push(`<li>${inlineFormat(olMatch[1])}</li>`);
+      continue;
+    }
+    if (/^[-*_]{3,}$/.test(line.trim())) { flushList(); out.push('<hr class="md-hr">'); continue; }
+    flushList();
+    out.push(`<p class="summary-para">${inlineFormat(line)}</p>`);
+  }
+  flushList();
+  return out.join('\n');
 }
 
 function closeDrawer() {
@@ -781,7 +858,7 @@ async function startBulkAdd() {
 
     try {
       // 1. Analyze (techniques + summary in one request)
-      const { techniques, summary } = await analyzeProblem(problems[i]);
+      const { techniques, summary, timeComplex, spaceComplex, special } = await analyzeProblem(problems[i]);
       if (!techniques) throw new Error('No techniques returned');
 
       // 2. Embed tags
@@ -800,6 +877,9 @@ async function startBulkAdd() {
         techniques,
         tagEmbeddings,
         summary,
+        timeComplex:  timeComplex  || '',
+        spaceComplex: spaceComplex || '',
+        special:      special      || 'None',
         problemText: summary || problems[i],
         addedAt: new Date().toISOString(),
         derivedFromId: null,
@@ -836,6 +916,22 @@ async function startBulkAdd() {
 // ─── EXPORT AS ZIP ────────────────────────────────────────────────────────────
 
 // ─── SHARED EXPORT HELPER ─────────────────────────────────────────────────────
+
+/** Build the markdown content for a single problem entry. */
+function buildProblemMarkdown(p, adjacency) {
+  const tags    = p.techniques.split(',').map(t => t.trim()).filter(Boolean);
+  const tagLine = tags.map(t => `\`${t}\``).join(', ');
+  const lines   = [
+    tagLine,
+    `Time complexity: ${p.timeComplex  || 'N/A'}`,
+    `Space complexity: ${p.spaceComplex || 'N/A'}`,
+    `Additional constraints: ${p.special && p.special !== 'None' ? p.special : 'None'}`,
+    p.problemText  || '_(no problem text stored)_',
+  ];
+  const links = [...adjacency.get(p.id)].map(id => `[[${id}]]`).join('  ');
+  if (links) lines.push('', '---', '', links);
+  return lines.join('\n');
+}
 
 function buildAdjacency() {
   const threshold = getThreshold();
@@ -884,12 +980,7 @@ async function exportAllProblems() {
     const adjacency = buildAdjacency();
 
     for (const p of db) {
-      const tags    = p.techniques.split(',').map(t => t.trim()).filter(Boolean);
-      const tagLine = tags.map(t => `\`${t}\``).join(', ');
-      const links   = [...adjacency.get(p.id)].map(id => `[[${id}]]`).join('  ');
-      const parts   = [tagLine, '', p.problemText || '_(no problem text stored)_'];
-      if (links) parts.push('', '---', '', links);
-      zip.file(`problems/${p.id}.md`, parts.join('\n'));
+      zip.file(`problems/${p.id}.md`, buildProblemMarkdown(p, adjacency));
     }
 
     const blob = await zip.generateAsync({ type: 'blob' });
@@ -1011,12 +1102,7 @@ function exportCanvas() {
     const zip = new JSZip();
 
     for (const p of db) {
-      const tags    = p.techniques.split(',').map(t => t.trim()).filter(Boolean);
-      const tagLine = tags.map(t => `\`${t}\``).join(', ');
-      const links   = [...adjacency.get(p.id)].map(id => `[[${id}]]`).join('  ');
-      const parts   = [tagLine, '', p.problemText || '_(no problem text stored)_'];
-      if (links) parts.push('', '---', '', links);
-      zip.file(`problems/${p.id}.md`, parts.join('\n'));
+      zip.file(`problems/${p.id}.md`, buildProblemMarkdown(p, adjacency));
     }
 
     const canvas = { nodes: canvasNodes, edges: canvasEdges };
