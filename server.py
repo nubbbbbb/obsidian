@@ -60,74 +60,48 @@ def analyze():
 
     prompt = (
         "You are a competitive programming expert. "
-        "Analyze the problem below and produce TWO sections separated by exactly '---'.\n\n"
-
-        "SECTION 1 — Techniques:\n"
-        "Output a single comma-separated list of the specific algorithmic techniques "
-        "required to solve this problem. Rules:\n"
-        "- Only REAL, non-trivial, problem-specific CP techniques.\n"
-        "- Always use the most specific subtype — never a bare category name:\n"
-        "  DP subtypes: 2D DP, bitmask DP, digit DP, interval DP, knapsack DP, "
-        "DP on trees, DP on DAG, DP with monotone deque, broken profile DP, "
-        "DP with divide and conquer optimization, DP with convex hull trick.\n"
-        "  Graph subtypes: multi-source BFS, 0-1 BFS, BFS on grid, "
-        "Dijkstra on implicit graph, Bellman-Ford, Floyd-Warshall, SCC (Tarjan), "
-        "SCC (Kosaraju), bipartite matching, topological sort, Euler path/circuit.\n"
-        "  Segment tree subtypes: segment tree with lazy propagation, "
-        "persistent segment tree, segment tree beats, merge sort tree, 2D segment tree.\n"
-        "  Binary search subtypes: binary search on answer, "
-        "binary search on floating point, parallel binary search.\n"
-        "  Greedy subtypes: greedy with sorting, greedy with priority queue, "
-        "exchange argument greedy.\n"
-        "  Strings: KMP, Z-algorithm, Aho-Corasick, suffix array, suffix automaton, rolling hash.\n"
-        "  Trees: LCA with binary lifting, LCA with Euler tour, HLD, centroid decomposition, "
-        "small-to-large merging, DSU on tree.\n"
-        "  Math: matrix exponentiation, inclusion-exclusion, Mobius inversion, "
-        "Euler totient, Lucas theorem, NTT, FFT, Gaussian elimination.\n"
-        "  Other: two pointers, sliding window, prefix sum, difference array, "
-        "sparse table (RMQ), union-find (DSU), binary indexed tree (Fenwick tree), "
-        "Mo's algorithm, sqrt decomposition, offline processing, "
-        "coordinate compression, hashing.\n"
-        "- Do NOT output bare names like 'dynamic programming', 'graph', "
-        "'segment tree', 'binary search', or 'greedy' alone.\n"
-        "- Do NOT include: recursion, iteration, loops, arrays, sorting (unless it IS "
-        "the key insight), input parsing, brute force, simulation (unless deliberate).\n"
-        "- Omit sub-steps that are not independently noteworthy.\n\n"
-
-        "SECTION 2 — Summary:\n"
-        "A concise markdown summary in EXACTLY this format:\n"
-        "  Line 1: key numeric constraints and input type as bold inline tags, "
-        "comma-separated. Example: **N ≤ 2×10⁵**, **Q ≤ 10⁵**, **weighted tree**, **1 ≤ w ≤ 10⁹**\n"
-        "  Blank line.\n"
-        "  One markdown paragraph (3–6 sentences): what the problem asks, "
-        "the key structural difficulty, and the binding constraints. "
-        "Use inline code for variable names. Do NOT name algorithms or solution approaches.\n\n"
-
-        "Output format — EXACTLY:\n"
-        "<comma-separated techniques>\n"
-        "---\n"
-        "<summary>\n\n"
+        "Analyze the problem and output EXACTLY 5 lines, no labels, no preamble.\n\n"
+        "Line 1: comma-separated specific CP techniques (e.g. 'Bitmask DP, Binary Search on Answer', not bare 'DP' or 'Graph'). "
+        "Never include trivial implementation details: no recursion, iteration, loops, arrays, sorting (unless it is the key insight), input parsing, brute force, or simulation. "
+        "Each technique must use its single canonical name — no alternatives or parenthetical aliases (e.g. 'DSU', not 'Union-Find (DSU)' or 'Union-Find'; 'Fenwick Tree', not 'BIT' or 'Binary Indexed Tree'). "
+        "Capitalize each technique in title case (e.g. 'Segment Tree with Lazy Propagation', 'Binary Search on Answer', 'DSU on Tree').\n"
+        "Line 2: tightest Big-O time complexity an accepted solution must meet (e.g. O(N log N)).\n"
+        "Line 3: tightest Big-O space complexity (e.g. O(N)).\n"
+        "Line 4: any non-obvious special constraints (online queries, overflow risk, etc.) — or exactly 'None'.\n"
+        "Line 5: one sentence — what is given, what operations exist, what the goal is. "
+        "Example: 'Given an array of N integers, find the subarray with the largest sum.'\n\n"
         f"Problem:\n{problem}"
     )
 
     url     = f"{GEMINI_BASE}/models/{LLM_MODEL}:generateContent?key={GOOGLE_API_KEY}"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 600},
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 200},
     }
 
     try:
         resp = requests.post(url, json=payload, timeout=40)
         resp.raise_for_status()
         data = resp.json()
-        raw  = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        raw   = data["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-        # Split on the first '---' separator
-        parts      = raw.split("---", 1)
-        techniques = parts[0].strip()
-        summary    = parts[1].strip() if len(parts) > 1 else ""
+        # Parse the 5-line structured output
+        # Line 1: techniques, Line 2: time complexity, Line 3: space complexity
+        # Line 4: special constraints, Line 5+: summary (may be multi-line)
+        lines = raw.split("\n")
+        techniques   = lines[0].strip() if len(lines) > 0 else ""
+        time_complex = lines[1].strip() if len(lines) > 1 else ""
+        space_complex = lines[2].strip() if len(lines) > 2 else ""
+        special      = lines[3].strip() if len(lines) > 3 else "None"
+        summary      = "\n".join(lines[4:]).strip() if len(lines) > 4 else ""
 
-        return jsonify({"techniques": techniques, "summary": summary})
+        return jsonify({
+            "techniques":    techniques,
+            "timeComplex":   time_complex,
+            "spaceComplex":  space_complex,
+            "special":       special,
+            "summary":       summary,
+        })
     except requests.HTTPError:
         return jsonify({"error": _gemini_error(resp)}), 502
     except Exception as e:

@@ -882,3 +882,51 @@ input[type="range"] {
   padding: 0.05rem 0.3rem;
   border-radius: 2px;
 }
+/* ─── STRUCTURED SUMMARY DISPLAY ─────────────────────────────────────────── */
+.summary-meta {
+  margin-bottom: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.summary-meta-row {
+  font-size: 0.72rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.summary-complexities {
+  color: var(--accent3);
+  font-family: 'Space Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+}
+
+.summary-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-right: 0.2rem;
+}
+
+.summary-stmt-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  margin-bottom: 0.35rem;
+}
+
+.summary-stmt {
+  font-size: 0.78rem;
+  line-height: 1.8;
+  color: var(--text);
+}
+/* ─── SLIDER GROUP DIVIDER ────────────────────────────────────────────────── */
+.slider-group-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.6rem 0 0.5rem;
+}

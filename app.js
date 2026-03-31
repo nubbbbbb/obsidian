@@ -22,13 +22,69 @@ window.addEventListener('DOMContentLoaded', () => {
   document.getElementById('threshold').addEventListener('input', (e) => {
     document.getElementById('thresholdVal').textContent =
       parseFloat(e.target.value).toFixed(2);
-    redrawGraph();
+    updateLinks();
   });
   renderList();
   redrawGraph();
 });
 
-// ─── STATUS HELPER ────────────────────────────────────────────────────────────
+// ─── FORCE PARAMETERS ────────────────────────────────────────────────────────
+function getSpringLen()    { return 200; }
+function getRepelRadius()  { return 240; }
+function getSpringStr()    { return 0.3; }
+function getNoEdgeLen()    { return 400; }
+function getNoEdgeStr()    { return 0.002; }
+
+// Short-range repulsion: pushes nodes apart only within repelRadius, falls off linearly.
+// Unconnected distant nodes feel nothing — no global drift.
+function forceShortRepel() {
+  let nodes, radius = 120, strength = 1;
+  function force() {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        if (dist >= radius) continue;
+        const f = strength * (1 - dist / radius) / dist;
+        a.vx -= dx * f; a.vy -= dy * f;
+        b.vx += dx * f; b.vy += dy * f;
+      }
+    }
+  }
+  force.initialize = n => { nodes = n; };
+  force.radius     = r => { radius = r; return force; };
+  force.strength   = s => { strength = s; return force; };
+  return force;
+}
+
+// Non-edge spring: for every pair NOT connected by an edge, apply a spring
+// toward `restLen`. Repels when too close, attracts when too far — keeps
+// unconnected nodes at a comfortable, adjustable spread.
+function forceNonEdgeSpring() {
+  let nodes, edgeSet = new Set(), restLen = 280, strength = 0.008;
+  function force() {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i], b = nodes[j];
+        const key = a.id < b.id ? `${a.id}|${b.id}` : `${b.id}|${a.id}`;
+        if (edgeSet.has(key)) continue;
+        const dx = b.x - a.x, dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const f = strength * (dist - restLen) / dist;
+        a.vx += dx * f; a.vy += dy * f;
+        b.vx -= dx * f; b.vy -= dy * f;
+      }
+    }
+  }
+  force.initialize = n => { nodes = n; };
+  force.edgeSet    = s => { edgeSet = s; return force; };
+  force.restLen    = r => { restLen = r; return force; };
+  force.strength   = s => { strength = s; return force; };
+  return force;
+}
+
+
 function setStatus(msg, isError = false) {
   const el = document.getElementById('status');
   el.className = isError ? 'error' : '';
@@ -209,6 +265,7 @@ function renderList() {
 function deleteProblem(e, id) {
   e.stopPropagation();
   db = db.filter(p => p.id !== id);
+  delete nodePositions[id];
   saveDB(db);
   if (highlightedId === id) highlightedId = null;
   renderList();
@@ -227,9 +284,10 @@ function highlightNode(id) {
 }
 
 // ─── D3 FORCE GRAPH ───────────────────────────────────────────────────────────
-let simulation   = null;
-let zoomBehavior = null;
-let svgRoot      = null;
+let simulation     = null;
+let zoomBehavior   = null;
+let svgRoot        = null;
+let nodePositions  = {};   // id → { x, y } — persists across redraws
 
 function getThreshold() {
   return parseFloat(document.getElementById('threshold').value);
@@ -281,19 +339,72 @@ function buildGraphData() {
   return { nodes, links, simLinks, derivedLinks };
 }
 
+// Live DOM references so updateLinks() can reach them without a full rebuild
+let _simLinkEl    = null;
+let _derivedLinkEl = null;
+let _simNodes     = null;   // the node array currently bound to the simulation
+
+// ── updateLinks: recompute edges and nudge simulation — no SVG teardown ──────
+function updateLinks() {
+  if (!simulation || !_simNodes) return;
+
+  const { simLinks, derivedLinks } = buildGraphData();
+
+  // Update edge DOM elements in-place
+  const gSim = d3.select('#graph-svg g g:nth-child(1)');
+  const gDer = d3.select('#graph-svg g g:nth-child(2)');
+
+  _simLinkEl = gSim.selectAll('line').data(simLinks, d => `${d.source}-${d.target}`)
+    .join('line')
+      .attr('class',          'link')
+      .attr('stroke-width',   d => 1 + d.sim * 5)
+      .attr('stroke-opacity', d => 0.2 + d.sim * 0.6);
+
+  _derivedLinkEl = gDer.selectAll('line').data(derivedLinks, d => `${d.source}-${d.target}`)
+    .join('line')
+      .attr('class', 'link link-derived')
+      .attr('stroke-width',   2)
+      .attr('stroke-opacity', 0.75)
+      .attr('stroke-dasharray', '5,3');
+
+  const allLinks = [...simLinks, ...derivedLinks];
+  simulation.force('link').links(allLinks);
+  simulation.force('link').strength(getSpringStr());
+
+  // Refresh edge set for non-edge spring after link topology changes
+  const newEdgeSet = new Set(allLinks.map(l => {
+    const a = typeof l.source === 'object' ? l.source.id : l.source;
+    const b = typeof l.target === 'object' ? l.target.id : l.target;
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }));
+  simulation.force('nonEdge').edgeSet(newEdgeSet);
+
+  // Tiny nudge so edges settle without throwing nodes around
+  simulation.alpha(0.08).restart();
+}
+
 function redrawGraph() {
   const svg = d3.select('#graph-svg');
   svg.selectAll('*').remove();
 
   document.getElementById('emptyState').style.display =
     db.length === 0 ? 'flex' : 'none';
-  if (db.length === 0) return;
+  if (db.length === 0) { simulation = null; _simNodes = null; return; }
 
   const { width, height } =
     document.querySelector('.graph-panel').getBoundingClientRect();
   svg.attr('viewBox', `0 0 ${width} ${height}`);
 
   const { nodes, links, simLinks, derivedLinks } = buildGraphData();
+
+  // Seed positions from cache so nodes don't explode on redraw
+  for (const n of nodes) {
+    if (nodePositions[n.id]) {
+      n.x = nodePositions[n.id].x;
+      n.y = nodePositions[n.id].y;
+    }
+  }
+  _simNodes = nodes;
 
   // ── Zoom ────────────────────────────────────────────────────────────────────
   const g = svg.append('g');
@@ -305,22 +416,43 @@ function redrawGraph() {
 
   // ── Force simulation ────────────────────────────────────────────────────────
   if (simulation) simulation.stop();
+  const repel = forceShortRepel().radius(getRepelRadius()).strength(1);
+
+  // Build edge set for non-edge spring (all linked pairs, sim + derived)
+  const edgeSet = new Set(links.map(l => {
+    const a = typeof l.source === 'object' ? l.source.id : l.source;
+    const b = typeof l.target === 'object' ? l.target.id : l.target;
+    return a < b ? `${a}|${b}` : `${b}|${a}`;
+  }));
+  const nonEdge = forceNonEdgeSpring()
+    .edgeSet(edgeSet)
+    .restLen(getNoEdgeLen())
+    .strength(getNoEdgeStr());
+
   simulation = d3.forceSimulation(nodes)
+    .alpha(0.3)
+    .alphaDecay(0.02)
+    .velocityDecay(0.4)
     .force('link',      d3.forceLink(links).id(d => d.id)
-                           .distance(d => d.derived ? 80 : 120 * (1 - d.sim) + 60))
-    .force('charge',    d3.forceManyBody().strength(-200))
-    .force('center',    d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide(30));
+                           .distance(d => {
+                             const len = getSpringLen();
+                             return d.derived ? len * 0.6 : len * (1 - d.sim * 0.6);
+                           })
+                           .strength(getSpringStr()))
+    .force('repel',     repel)
+    .force('nonEdge',   nonEdge)
+    .force('center',    d3.forceCenter(width / 2, height / 2).strength(0.02))
+    .force('collision', d3.forceCollide(22).strength(0.8));
 
   // ── Similarity links ─────────────────────────────────────────────────────────
-  const simLinkEl = g.append('g')
+  _simLinkEl = g.append('g')
     .selectAll('line').data(simLinks).join('line')
       .attr('class',          'link')
       .attr('stroke-width',   d => 1 + d.sim * 5)
       .attr('stroke-opacity', d => 0.2 + d.sim * 0.6);
 
   // ── Derived (buff/nerf) links ────────────────────────────────────────────────
-  const derivedLinkEl = g.append('g')
+  _derivedLinkEl = g.append('g')
     .selectAll('line').data(derivedLinks).join('line')
       .attr('class', 'link link-derived')
       .attr('stroke-width',   2)
@@ -367,7 +499,7 @@ function redrawGraph() {
     .on('mouseout',  () => document.getElementById('tooltip').classList.remove('visible'))
     .on('click',     (e, d) => {
       document.getElementById('tooltip').classList.remove('visible');
-      openDrawer(d.id);
+      highlightNode(d.id);
     });
 
   // Numeric label
@@ -375,10 +507,13 @@ function redrawGraph() {
 
   // ── Tick ────────────────────────────────────────────────────────────────────
   simulation.on('tick', () => {
-    simLinkEl
+    // Persist positions so redraws can seed from them
+    for (const n of nodes) nodePositions[n.id] = { x: n.x, y: n.y };
+
+    _simLinkEl
       .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-    derivedLinkEl
+    _derivedLinkEl
       .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
     node.attr('transform', d => `translate(${d.x},${d.y})`);
@@ -549,7 +684,7 @@ function toggleDerivedEdges() {
   showDerivedEdges = !showDerivedEdges;
   const btn = document.getElementById('derivedToggleBtn');
   btn.classList.toggle('active', showDerivedEdges);
-  redrawGraph();
+  updateLinks();
 }
 
 // ─── PANEL COLLAPSE ───────────────────────────────────────────────────────────
