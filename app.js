@@ -5,16 +5,23 @@ const API_BASE = '';  // same-origin; change to 'http://localhost:5000' if neede
 // Schema per entry:
 //   { id, techniques, tagEmbeddings, problemText, addedAt }
 //   tagEmbeddings: { "bitmask DP": [float, ...], "0-1 BFS": [...], ... }
-const DB_KEY = 'cp_problems_v3';
+const DB_KEY = 'cp_problems_v4';
 
 function loadDB() {
   try {
+    // Migrate from v3 → v4 if needed
+    const legacy = localStorage.getItem('cp_problems_v3');
+    if (legacy && !localStorage.getItem(DB_KEY)) {
+      localStorage.setItem(DB_KEY, legacy);
+    }
     const data = JSON.parse(localStorage.getItem(DB_KEY)) || [];
-    // Migrate old entries that predate constraint fields
+    // Migrate old entries that predate constraint / solution fields
     return data.map(p => ({
       timeComplex:  '',
       spaceComplex: '',
       special:      'None',
+      feasibility:  'practical',
+      solution:     null,
       ...p,
     }));
   }
@@ -128,7 +135,7 @@ async function analyzeProblem(problemText) {
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return { techniques: data.techniques, summary: data.summary, timeComplex: data.timeComplex, spaceComplex: data.spaceComplex, special: data.special };
+  return { feasibility: data.feasibility || 'practical', techniques: data.techniques, summary: data.summary, timeComplex: data.timeComplex, spaceComplex: data.spaceComplex, special: data.special };
 }
 
 /**
@@ -152,9 +159,29 @@ async function embedTags(tags) {
 
 /**
  * POST /api/modify
- * Body:  { problem: string, mode: "buff" | "nerf" }
+ * Body:  { problem: string, mode: "buff" | "nerf", requirements?: string }
  * Reply: { result: string }
  */
+async function modifyProblem(problem, mode, requirements = '') {
+  const res  = await fetch(`${API_BASE}/api/modify`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      problem:      problem.problemText,
+      summary:      problem.summary      || '',
+      techniques:   problem.techniques   || '',
+      timeComplex:  problem.timeComplex  || '',
+      spaceComplex: problem.spaceComplex || '',
+      special:      problem.special      || 'None',
+      feasibility:  problem.feasibility  || 'practical',
+      mode,
+      requirements,
+    }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data.result;
+}
 
 // ─── SIMILARITY: SOFT JACCARD WITH PER-TAG EMBEDDINGS ────────────────────────
 //
@@ -213,7 +240,7 @@ async function analyze(derivedFromId = null) {
   try {
     // 1. Extract techniques + summary in one request
     setStatus('<span class="spinner"></span>Analyzing…');
-    const { techniques, summary, timeComplex, spaceComplex, special } = await analyzeProblem(text);
+    const { feasibility, techniques, summary, timeComplex, spaceComplex, special } = await analyzeProblem(text);
     if (!techniques) throw new Error('No techniques extracted.');
 
     // 2. Embed tags
@@ -228,7 +255,7 @@ async function analyze(derivedFromId = null) {
 
     // 3. Persist
     const id    = Date.now();
-    const entry = { id, techniques, tagEmbeddings, summary, timeComplex: timeComplex || '', spaceComplex: spaceComplex || '', special: special || 'None', problemText: summary || text, addedAt: new Date().toISOString(), derivedFromId: derivedFromId || null };
+    const entry = { id, techniques, tagEmbeddings, summary, feasibility: feasibility || 'practical', timeComplex: timeComplex || '', spaceComplex: spaceComplex || '', special: special || 'None', solution: null, problemText: summary || text, addedAt: new Date().toISOString(), derivedFromId: derivedFromId || null };
     db.push(entry);
     saveDB(db);
 
@@ -566,13 +593,15 @@ function openDrawer(id) {
 
   // Complexity metadata — remove any previously injected block first
   document.querySelector('.drawer-constraints')?.remove();
+  const feasibility = problem.feasibility || 'practical';
   const constraintsHtml = `
     <div class="drawer-constraints">
-      <div class="constraint-row"><span class="constraint-label">Time complexity</span><span class="constraint-value">${stripDollar(problem.timeComplex || 'N/A')}</span></div>
-      <div class="constraint-row"><span class="constraint-label">Space complexity</span><span class="constraint-value">${stripDollar(problem.spaceComplex || 'N/A')}</span></div>
-      <div class="constraint-row"><span class="constraint-label">Additional constraints</span><span class="constraint-value ${problem.special && problem.special !== 'None' ? 'constraint-value-special' : ''}">${stripDollar(problem.special && problem.special !== 'None' ? problem.special : 'None')}</span></div>
+      <div class="constraint-row"><span class="constraint-label">Feasibility</span><span class="constraint-value feasibility-badge feasibility-${feasibility}">${feasibility}</span></div>
+      <div class="constraint-row"><span class="constraint-label">Time complexity</span><span class="constraint-value">${renderMath(problem.timeComplex || 'N/A')}</span></div>
+      <div class="constraint-row"><span class="constraint-label">Space complexity</span><span class="constraint-value">${renderMath(problem.spaceComplex || 'N/A')}</span></div>
+      <div class="constraint-row"><span class="constraint-label">Additional constraints</span><span class="constraint-value">${renderMath(problem.special && problem.special !== 'None' ? problem.special : 'None')}</span></div>
     </div>`;
-  document.getElementById('drawerTags').insertAdjacentHTML('afterend', constraintsHtml);
+  document.querySelector('.drawer-tags-row').insertAdjacentHTML('afterend', constraintsHtml);
 
   // Summary — always present since it's fetched at add-time
   const bodyEl = document.getElementById('drawerBody');
@@ -581,13 +610,24 @@ function openDrawer(id) {
     : `<span style="color:var(--muted);font-size:0.72rem">No summary available.</span>`;
 
   document.getElementById('drawerActions').innerHTML = `
-    <button class="drawer-action-btn buff-btn" onclick="triggerModify(${id}, 'buff')">
-      ⬆ Buff Problem
-    </button>
-    <button class="drawer-action-btn nerf-btn" onclick="triggerModify(${id}, 'nerf')">
-      ⬇ Nerf Problem
-    </button>
+    <button class="drawer-action-btn buff-btn" onclick="triggerModify(${id}, 'buff')">Buff</button>
+    <button class="drawer-action-btn nerf-btn" onclick="triggerModify(${id}, 'nerf')">Nerf</button>
+    <button class="drawer-action-btn remix-btn" onclick="triggerModify(${id}, 'remix')">Remix</button>
+    <button class="drawer-action-btn solution-btn" id="solutionBtn" onclick="triggerSolution(${id})">Solution</button>
   `;
+
+  // Solution section — show cached solution or a placeholder
+  const existing = document.getElementById('drawerSolutionSection');
+  if (existing) existing.remove();
+  const solutionHtml = problem.solution
+    ? `<div class="drawer-solution-section" id="drawerSolutionSection">
+         <div class="drawer-solution-label">Solution</div>
+         <div class="drawer-solution-body">${renderMarkdownSummary(problem.solution)}</div>
+       </div>`
+    : `<div class="drawer-solution-section drawer-solution-empty" id="drawerSolutionSection">
+         <span>No solution yet — click <strong>💡 Solution</strong> to generate one.</span>
+       </div>`;
+  document.getElementById('drawerBody').insertAdjacentHTML('afterend', solutionHtml);
 
   document.getElementById('problemDrawer').classList.add('open');
   document.getElementById('drawerBackdrop').classList.add('open');
@@ -597,7 +637,31 @@ function openDrawer(id) {
   d3.selectAll('.node').classed('highlighted', d => d.id === highlightedId);
 }
 
-/** Strip $...$ delimiters for web display (kept in exports). */
+/** Render $...$ and $$...$$ math using KaTeX, fallback to plain text.
+ *  Non-math segments are HTML-escaped so raw text is safe to inject into innerHTML. */
+function renderMath(s) {
+  if (typeof katex === 'undefined') return escapeHtml(s).replace(/\$([^$]+)\$/g, '$1');
+
+  // Split on math delimiters, alternating: text, math, text, math, ...
+  // Pattern captures both $$...$$ and $...$
+  const parts = s.split(/(\$\$[\s\S]+?\$\$|\$[^$\n]+?\$)/g);
+  return parts.map((part, i) => {
+    if (i % 2 === 0) {
+      // Plain text — escape HTML
+      return escapeHtml(part);
+    }
+    // Math span
+    const isDisplay = part.startsWith('$$');
+    const expr = isDisplay ? part.slice(2, -2).trim() : part.slice(1, -1).trim();
+    try {
+      return katex.renderToString(expr, { displayMode: isDisplay, throwOnError: false });
+    } catch {
+      return escapeHtml(part);
+    }
+  }).join('');
+}
+
+/** Strip $...$ delimiters for plain-text contexts (exports, labels). */
 function stripDollar(s) {
   return s.replace(/\$([^$]+)\$/g, '$1');
 }
@@ -609,7 +673,7 @@ function renderMarkdownSummary(md) {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
   function inlineFormat(s) {
-    return escBase(stripDollar(s))
+    return renderMath(s)
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.+?)\*/g,   '<em>$1</em>')
       .replace(/`(.+?)`/g,     '<code class="md-code">$1</code>');
@@ -659,21 +723,66 @@ function renderMarkdownSummary(md) {
 function closeDrawer() {
   document.getElementById('problemDrawer').classList.remove('open');
   document.getElementById('drawerBackdrop').classList.remove('open');
+  document.getElementById('drawerSolutionSection')?.remove();
 }
 
 // ─── BUFF / NERF FLOW ─────────────────────────────────────────────────────────
-async function triggerModify(id, mode) {
+function triggerModify(id, mode) {
+  openModifyInputModal(id, mode);
+}
+
+function openModifyInputModal(id, mode) {
+  const modal   = document.getElementById('modifyModal');
+  const title   = document.getElementById('modifyModalTitle');
+  const body    = document.getElementById('modifyModalBody');
+  const actions = document.getElementById('modifyModalActions');
+
+  const modeLabel = mode === 'buff' ? 'Buff Problem' : mode === 'nerf' ? 'Nerf Problem' : 'Remix Problem';
+  const accent    = mode === 'buff' ? 'var(--accent)' : mode === 'nerf' ? 'var(--accent3)' : '#ffcc66';
+  const modeVerb  = mode === 'remix' ? 'remixed' : mode + 'ed';
+
+  title.textContent = modeLabel;
+  title.style.color = accent;
+
+  body.innerHTML = `
+    <div class="modify-input-hint">
+      Optionally describe any specific requirements for the ${modeVerb} problem.<br>
+      Leave blank to let the AI decide freely.
+    </div>
+    <textarea id="modifyRequirementsInput" class="modify-requirements-textarea"
+      placeholder="e.g. Make it require a segment tree. Keep N under 10^5. Add a query system…"></textarea>`;
+
+  actions.innerHTML = `
+    <button class="btn btn-secondary" onclick="closeModifyModal()">Cancel</button>
+    <button class="btn btn-primary" id="modifyGenerateBtn" onclick="executeModify(${id}, '${mode}')">Generate</button>`;
+
+  modal.classList.add('open');
+
+  // Focus the textarea after transition
+  setTimeout(() => document.getElementById('modifyRequirementsInput')?.focus(), 280);
+}
+
+async function executeModify(id, mode) {
   const problem = db.find(p => p.id === id);
   if (!problem) return;
 
-  const label   = mode === 'buff' ? '⬆ Buff' : '⬇ Nerf';
-  const btn     = document.querySelector(`.${mode}-btn`);
-  const allBtns = document.querySelectorAll('.drawer-action-btn');
-  allBtns.forEach(b => b.disabled = true);
-  btn.innerHTML = `<span class="spinner"></span>${label}ing…`;
+  const requirements = (document.getElementById('modifyRequirementsInput')?.value || '').trim();
+
+  const modal   = document.getElementById('modifyModal');
+  const title   = document.getElementById('modifyModalTitle');
+  const body    = document.getElementById('modifyModalBody');
+  const actions = document.getElementById('modifyModalActions');
+
+  const modeLabel = mode === 'buff' ? 'Buff Problem' : mode === 'nerf' ? 'Nerf Problem' : 'Remix Problem';
+  const accent    = mode === 'buff' ? 'var(--accent)' : mode === 'nerf' ? 'var(--accent3)' : '#ffcc66';
+
+  title.textContent = `${modeLabel} — Generating…`;
+  title.style.color = accent;
+  body.innerHTML    = `<div class="modify-generating"><span class="spinner"></span><span>Asking the AI…</span></div>`;
+  actions.innerHTML = '';
 
   try {
-    const result = await modifyProblem(problem.problemText, mode);
+    const result = await modifyProblem(problem, mode, requirements);
     if (result.trim().toLowerCase().startsWith("sorry i can't do this task")) {
       openModifyModal({ failed: true, mode });
     } else {
@@ -681,9 +790,6 @@ async function triggerModify(id, mode) {
     }
   } catch (e) {
     openModifyModal({ failed: true, mode, errorMsg: e.message });
-  } finally {
-    allBtns.forEach(b => b.disabled = false);
-    btn.innerHTML = mode === 'buff' ? '⬆ Buff Problem' : '⬇ Nerf Problem';
   }
 }
 
@@ -697,7 +803,7 @@ function openModifyModal({ failed, mode, result, originalId, errorMsg }) {
   const body    = document.getElementById('modifyModalBody');
   const actions = document.getElementById('modifyModalActions');
 
-  const modeLabel = mode === 'buff' ? '⬆ Buffed' : '⬇ Nerfed';
+  const modeLabel = mode === 'buff' ? '⬆ Buffed' : mode === 'nerf' ? '⬇ Nerfed' : '⟳ Remixed';
 
   if (failed) {
     _pendingModifiedText = null;
@@ -754,7 +860,64 @@ function handleModifyOverlayClick(e) {
   if (e.target === document.getElementById('modifyModal')) closeModifyModal();
 }
 
-// ─── DERIVED EDGES TOGGLE ─────────────────────────────────────────────────────
+// ─── SOLUTION FLOW ────────────────────────────────────────────────────────────
+
+/**
+ * POST /api/solution
+ * Body:  { problem: string, techniques: string }
+ * Reply: { solution: string }
+ */
+async function solveProblem(problemText, techniques, timeComplex, spaceComplex, special, feasibility) {
+  const res  = await fetch(`${API_BASE}/api/solution`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ problem: problemText, techniques, timeComplex, spaceComplex, special, feasibility }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data.solution;
+}
+
+async function triggerSolution(id) {
+  const problem = db.find(p => p.id === id);
+  if (!problem) return;
+
+  const btn     = document.getElementById('solutionBtn');
+  const allBtns = document.querySelectorAll('.drawer-action-btn');
+  allBtns.forEach(b => b.disabled = true);
+  btn.innerHTML = `<span class="spinner"></span>Solving…`;
+
+  // Update placeholder while loading
+  const section = document.getElementById('drawerSolutionSection');
+  if (section) {
+    section.className = 'drawer-solution-section drawer-solution-loading';
+    section.innerHTML = `<span class="spinner"></span><span style="color:var(--muted);font-size:0.72rem">Generating solution…</span>`;
+  }
+
+  try {
+    const solution = await solveProblem(problem.problemText, problem.techniques, problem.timeComplex, problem.spaceComplex, problem.special, problem.feasibility);
+
+    // Cache in DB
+    problem.solution = solution;
+    saveDB(db);
+
+    // Render in drawer
+    if (section) {
+      section.className = 'drawer-solution-section';
+      section.innerHTML = `
+        <div class="drawer-solution-label">Solution</div>
+        <div class="drawer-solution-body">${renderMarkdownSummary(solution)}</div>`;
+    }
+  } catch (e) {
+    if (section) {
+      section.className = 'drawer-solution-section drawer-solution-error';
+      section.innerHTML = `<span style="color:var(--accent2);font-size:0.72rem">✗ ${escapeHtml(e.message)}</span>`;
+    }
+  } finally {
+    allBtns.forEach(b => b.disabled = false);
+    btn.innerHTML = 'Solution';
+  }
+}
 let showDerivedEdges = true;
 
 function toggleDerivedEdges() {
@@ -792,12 +955,8 @@ let _bulkRunning = false;
 
 function openBulkModal() {
   document.getElementById('bulkModal').classList.add('open');
-  document.getElementById('bulkProgress').style.display = 'none';
   document.getElementById('bulkInput').style.display = 'block';
   document.getElementById('bulkInput').value = '';
-  document.getElementById('bulkLog').innerHTML = '';
-  document.getElementById('bulkProgressBar').style.width = '0%';
-  document.getElementById('bulkProgressLabel').textContent = '';
   document.getElementById('bulkStartBtn').disabled = false;
   document.getElementById('bulkStartBtn').innerHTML = '▶ Start Processing';
   document.getElementById('bulkModalFooter').innerHTML = `
@@ -828,15 +987,19 @@ async function startBulkAdd() {
 
   _bulkRunning = true;
 
-  // Swap to progress UI
-  document.getElementById('bulkInput').style.display = 'none';
-  document.getElementById('bulkProgress').style.display = 'block';
-  document.getElementById('bulkModalFooter').innerHTML =
-    `<span style="font-size:0.65rem;color:var(--muted)">Processing — please wait…</span>`;
+  // Close the modal and show progress in the left panel
+  document.getElementById('bulkModal').classList.remove('open');
+  document.getElementById('panelLeft').querySelector('.panel-section').style.display = 'none';
+  const progressPanel = document.getElementById('bulkProgressPanel');
+  progressPanel.style.display = 'block';
 
   const log      = document.getElementById('bulkLog');
   const bar      = document.getElementById('bulkProgressBar');
   const label    = document.getElementById('bulkProgressLabel');
+  log.innerHTML = '';
+  bar.style.width = '0%';
+  label.textContent = '';
+  label.style.color = '';
 
   let succeeded = 0;
   let failed    = 0;
@@ -849,6 +1012,23 @@ async function startBulkAdd() {
     log.scrollTop = log.scrollHeight;
   }
 
+  const MAX_RETRIES = 3;
+  const RETRY_BASE_DELAY = 2000; // ms, doubles each attempt
+
+  async function withRetry(fn, label) {
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await fn();
+      } catch (e) {
+        const isRetryable = /demand|quota|rate|limit|overload|unavailable|503|429/i.test(e.message);
+        if (!isRetryable || attempt === MAX_RETRIES) throw e;
+        const delay = RETRY_BASE_DELAY * Math.pow(2, attempt - 1);
+        appendLog(`⟳ ${label} — retrying in ${delay / 1000}s (attempt ${attempt}/${MAX_RETRIES}): ${e.message}`, 'warn');
+        await new Promise(r => setTimeout(r, delay));
+      }
+    }
+  }
+
   for (let i = 0; i < problems.length; i++) {
     const pct = Math.round(((i) / problems.length) * 100);
     bar.style.width = pct + '%';
@@ -857,15 +1037,16 @@ async function startBulkAdd() {
     const snippet = problems[i].slice(0, 60).replace(/\n/g, ' ') + (problems[i].length > 60 ? '…' : '');
 
     try {
-      // 1. Analyze (techniques + summary in one request)
-      const { techniques, summary, timeComplex, spaceComplex, special } = await analyzeProblem(problems[i]);
+      // 1. Analyze with retry
+      const { feasibility, techniques, summary, timeComplex, spaceComplex, special } =
+        await withRetry(() => analyzeProblem(problems[i]), `[${i + 1}] analyze`);
       if (!techniques) throw new Error('No techniques returned');
 
-      // 2. Embed tags
+      // 2. Embed tags with retry
       const tags = techniques.split(',').map(t => t.trim()).filter(Boolean);
       let tagEmbeddings = {};
       try {
-        tagEmbeddings = await embedTags(tags);
+        tagEmbeddings = await withRetry(() => embedTags(tags), `[${i + 1}] embed`);
       } catch (e) {
         console.warn('Embedding failed for bulk item', i + 1, e.message);
       }
@@ -877,10 +1058,12 @@ async function startBulkAdd() {
         techniques,
         tagEmbeddings,
         summary,
+        feasibility:  feasibility  || 'practical',
         timeComplex:  timeComplex  || '',
         spaceComplex: spaceComplex || '',
         special:      special      || 'None',
-        problemText: summary || problems[i],
+        solution:     null,
+        problemText: problems[i],
         addedAt: new Date().toISOString(),
         derivedFromId: null,
       };
@@ -908,8 +1091,16 @@ async function startBulkAdd() {
 
   _bulkRunning = false;
 
-  document.getElementById('bulkModalFooter').innerHTML =
-    `<button class="btn btn-primary" onclick="closeBulkModal()">Close</button>`;
+  // Add dismiss button inside the progress panel
+  const dismissBtn = document.createElement('button');
+  dismissBtn.className = 'btn btn-secondary';
+  dismissBtn.style.cssText = 'margin-top:0.8rem;width:100%;font-size:0.65rem';
+  dismissBtn.textContent = 'Dismiss';
+  dismissBtn.onclick = () => {
+    document.getElementById('bulkProgressPanel').style.display = 'none';
+    document.getElementById('panelLeft').querySelector('.panel-section').style.display = '';
+  };
+  document.getElementById('bulkProgressPanel').appendChild(dismissBtn);
 }
 
 
@@ -923,11 +1114,15 @@ function buildProblemMarkdown(p, adjacency) {
   const tagLine = tags.map(t => `\`${t}\``).join(', ');
   const lines   = [
     tagLine,
+    `Feasibility: ${p.feasibility || 'practical'}`,
     `Time complexity: ${p.timeComplex  || 'N/A'}`,
     `Space complexity: ${p.spaceComplex || 'N/A'}`,
     `Additional constraints: ${p.special && p.special !== 'None' ? p.special : 'None'}`,
     p.problemText  || '_(no problem text stored)_',
   ];
+  if (p.solution) {
+    lines.push('', '## Solution', '', p.solution);
+  }
   const links = [...adjacency.get(p.id)].map(id => `[[${id}]]`).join('  ');
   if (links) lines.push('', '---', '', links);
   return lines.join('\n');

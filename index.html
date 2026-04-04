@@ -3,16 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CP Technique Graph</title>
+  <title>Graphite</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.9/katex.min.js"></script>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
 
 <header>
-  <h1>CP Technique Graph</h1>
-  <span>competitive programming · similarity explorer</span>
+  <h1>Graphite</h1>
+  <span>CP Problem Explorer</span>
 </header>
 
 <div class="layout" id="layout">
@@ -39,6 +41,16 @@ e.g. Given a tree with N nodes, find the maximum XOR path between any two nodes.
           ⊞ Bulk Add Problems
         </button>
         <div id="status"></div>
+      </div>
+
+      <!-- Bulk progress — shown in left panel during bulk add -->
+      <div class="panel-section bulk-progress-panel" id="bulkProgressPanel" style="display:none">
+        <div class="bulk-progress-header">⊞ Bulk Adding Problems</div>
+        <div class="bulk-progress-bar-wrap">
+          <div class="bulk-progress-bar" id="bulkProgressBar"></div>
+        </div>
+        <div class="bulk-progress-label" id="bulkProgressLabel"></div>
+        <div class="bulk-log" id="bulkLog"></div>
       </div>
     </div>
   </aside>
@@ -97,9 +109,10 @@ e.g. Given a tree with N nodes, find the maximum XOR path between any two nodes.
     </div>
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
   </div>
-  <div class="drawer-tags" id="drawerTags"></div>
-  <div class="drawer-actions" id="drawerActions"></div>
-  <div class="drawer-divider"></div>
+  <div class="drawer-tags-row">
+    <div class="drawer-tags" id="drawerTags"></div>
+    <div class="drawer-actions" id="drawerActions"></div>
+  </div>
   <div class="drawer-body" id="drawerBody"></div>
 </div>
 
@@ -136,13 +149,6 @@ Problem 2 statement here...
 ---
 
 Problem 3 statement here..."></textarea>
-      <div id="bulkProgress" class="bulk-progress" style="display:none">
-        <div class="bulk-progress-bar-wrap">
-          <div class="bulk-progress-bar" id="bulkProgressBar"></div>
-        </div>
-        <div class="bulk-progress-label" id="bulkProgressLabel"></div>
-        <div class="bulk-log" id="bulkLog"></div>
-      </div>
     </div>
     <div class="modify-modal-footer" id="bulkModalFooter">
       <button class="btn btn-secondary" onclick="closeBulkModal()">Cancel</button>

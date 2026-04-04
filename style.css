@@ -507,7 +507,7 @@ input[type="range"] {
   bottom: 0;
   left: 0;
   right: 0;
-  max-height: 55vh;
+  max-height: 72vh;
   background: var(--surface);
   border-top: 1px solid var(--border);
   z-index: 201;
@@ -515,6 +515,7 @@ input[type="range"] {
   flex-direction: column;
   transform: translateY(100%);
   transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+  overflow-y: auto;
 }
 
 #problemDrawer.open {
@@ -566,10 +567,22 @@ input[type="range"] {
 
 .drawer-close:hover { border-color: var(--accent2); color: var(--accent2); }
 
-.drawer-tags {
-  padding: 0.75rem 1.5rem;
+.drawer-tags-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1.5rem;
   flex-shrink: 0;
   border-bottom: 1px solid var(--border);
+}
+
+.drawer-tags {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
 }
 
 .drawer-constraints {
@@ -622,24 +635,22 @@ input[type="range"] {
 /* ─── DRAWER ACTION BUTTONS ───────────────────────────────────────────────── */
 .drawer-actions {
   display: flex;
-  gap: 0.75rem;
-  padding: 0.75rem 1.5rem;
-  border-bottom: 1px solid var(--border);
+  gap: 0.4rem;
   flex-shrink: 0;
 }
 
 .drawer-action-btn {
-  flex: 1;
-  padding: 0.55rem 0.75rem;
+  padding: 0.3rem 0.6rem;
   font-family: 'Space Mono', monospace;
-  font-size: 0.68rem;
+  font-size: 0.58rem;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
   cursor: pointer;
   border: 1px solid;
   background: transparent;
   transition: all 0.15s;
+  white-space: nowrap;
 }
 
 .drawer-action-btn:disabled {
@@ -664,6 +675,67 @@ input[type="range"] {
 .nerf-btn:hover:not(:disabled) {
   background: rgba(107, 203, 255, 0.12);
 }
+
+.solution-btn {
+  border-color: #c9a0ff;
+  color: #c9a0ff;
+}
+
+.solution-btn:hover:not(:disabled) {
+  background: rgba(201, 160, 255, 0.12);
+}
+
+/* ─── DRAWER SOLUTION SECTION ─────────────────────────────────────────────── */
+.drawer-solution-section {
+  padding: 1rem 1.5rem 1.25rem;
+  border-top: 1px solid var(--border);
+  background: rgba(201, 160, 255, 0.03);
+  flex-shrink: 0;
+}
+
+.drawer-solution-section.drawer-solution-empty {
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-style: italic;
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+}
+
+.drawer-solution-section.drawer-solution-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1.5rem;
+  background: transparent;
+}
+
+.drawer-solution-section.drawer-solution-error {
+  background: rgba(255, 107, 107, 0.04);
+  padding: 0.75rem 1.5rem;
+}
+
+.drawer-solution-label {
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #c9a0ff;
+  margin-bottom: 0.6rem;
+  font-weight: 700;
+}
+
+.drawer-solution-body {
+  font-size: 0.78rem;
+  line-height: 1.8;
+  color: var(--text);
+  overflow-y: auto;
+  max-height: 280px;
+}
+
+.drawer-solution-body::-webkit-scrollbar       { width: 4px; }
+.drawer-solution-body::-webkit-scrollbar-track { background: var(--bg); }
+.drawer-solution-body::-webkit-scrollbar-thumb { background: var(--border); }
+
+.drawer-solution-body .md-h { color: #c9a0ff; }
 
 /* ─── MODIFY RESULT MODAL ─────────────────────────────────────────────────── */
 .modify-modal-overlay {
@@ -731,6 +803,44 @@ input[type="range"] {
   flex-shrink: 0;
 }
 
+
+.modify-input-hint {
+  font-size: 0.68rem;
+  color: var(--muted);
+  line-height: 1.7;
+  margin-bottom: 0.85rem;
+  padding: 0.5rem 0.75rem;
+  background: rgba(107,203,255,0.05);
+  border-left: 2px solid var(--border);
+}
+
+.modify-requirements-textarea {
+  width: 100%;
+  height: 100px;
+  background: var(--node);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  font-size: 0.73rem;
+  padding: 0.7rem 0.85rem;
+  resize: none;
+  outline: none;
+  line-height: 1.6;
+  transition: border-color 0.2s;
+  display: block;
+}
+
+.modify-requirements-textarea:focus { border-color: var(--accent); }
+.modify-requirements-textarea::placeholder { color: var(--muted); }
+
+.modify-generating {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 2rem 1rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
 .modify-result-text {
   font-family: 'Space Mono', monospace;
   font-size: 0.75rem;
@@ -845,6 +955,22 @@ input[type="range"] {
   margin-top: 1rem;
 }
 
+.bulk-progress-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1;
+  min-height: 0;
+}
+
+.bulk-progress-header {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
 .bulk-progress-bar-wrap {
   height: 4px;
   background: var(--border);
@@ -881,6 +1007,7 @@ input[type="range"] {
 .bulk-log-line       { padding: 0.1rem 0; }
 .bulk-log-line.ok    { color: var(--accent); }
 .bulk-log-line.err   { color: var(--accent2); }
+.bulk-log-line.warn  { color: #ffcc66; }
 
 /* ─── DRAWER SUMMARY ──────────────────────────────────────────────────────── */
 .summary-loading {
@@ -987,4 +1114,40 @@ input[type="range"] {
   border: none;
   border-top: 1px solid var(--border);
   margin: 0.75rem 0;
+}
+/* ─── KATEX MATH RENDERING ────────────────────────────────────────────────── */
+.katex {
+  font-size: 1em;
+  color: var(--accent3);
+}
+
+.katex-display {
+  margin: 0.5rem 0;
+  overflow-x: auto;
+}
+
+.constraint-value .katex {
+  font-size: 0.9em;
+}
+
+/* ─── FEASIBILITY BADGE ───────────────────────────────────────────────────── */
+.feasibility-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.1rem 0.45rem;
+  border: 1px solid;
+}
+
+.feasibility-practical {
+  color: var(--accent);
+  border-color: rgba(127, 255, 178, 0.35);
+  background: rgba(127, 255, 178, 0.07);
+}
+
+.feasibility-theoretical {
+  color: var(--accent2);
+  border-color: rgba(255, 107, 107, 0.35);
+  background: rgba(255, 107, 107, 0.07);
 }
