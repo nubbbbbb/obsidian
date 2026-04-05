@@ -453,6 +453,14 @@ input[type="range"] {
   stroke: var(--accent);
   stroke-opacity: 0.5;
   fill: none;
+  pointer-events: stroke;
+  stroke-linecap: round;
+}
+
+/* Wider invisible hit area for easier edge hovering */
+.link:hover {
+  stroke-opacity: 0.9 !important;
+  filter: drop-shadow(0 0 4px var(--accent));
 }
 
 .link-derived {
@@ -515,7 +523,7 @@ input[type="range"] {
   flex-direction: column;
   transform: translateY(100%);
   transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
-  overflow-y: auto;
+  overflow-y: hidden;
 }
 
 #problemDrawer.open {
@@ -620,17 +628,22 @@ input[type="range"] {
 
 .drawer-body {
   padding: 1.25rem 1.5rem 1.5rem;
-  overflow-y: auto;
   font-size: 0.78rem;
   line-height: 1.8;
   color: var(--text);
   white-space: pre-wrap;
-  flex: 1;
 }
 
-.drawer-body::-webkit-scrollbar       { width: 4px; }
-.drawer-body::-webkit-scrollbar-track { background: var(--bg); }
-.drawer-body::-webkit-scrollbar-thumb { background: var(--border); }
+/* ─── DRAWER SCROLL WRAPPER ──────────────────────────────────────────────── */
+.drawer-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.drawer-scroll::-webkit-scrollbar       { width: 4px; }
+.drawer-scroll::-webkit-scrollbar-track { background: var(--bg); }
+.drawer-scroll::-webkit-scrollbar-thumb { background: var(--border); }
 
 /* ─── DRAWER ACTION BUTTONS ───────────────────────────────────────────────── */
 .drawer-actions {
@@ -676,6 +689,15 @@ input[type="range"] {
   background: rgba(107, 203, 255, 0.12);
 }
 
+.remix-btn {
+  border-color: var(--accent2);
+  color: var(--accent2);
+}
+
+.remix-btn:hover:not(:disabled) {
+  background: rgba(255, 107, 107, 0.12);
+}
+
 .solution-btn {
   border-color: #c9a0ff;
   color: #c9a0ff;
@@ -690,7 +712,6 @@ input[type="range"] {
   padding: 1rem 1.5rem 1.25rem;
   border-top: 1px solid var(--border);
   background: rgba(201, 160, 255, 0.03);
-  flex-shrink: 0;
 }
 
 .drawer-solution-section.drawer-solution-empty {
@@ -727,13 +748,7 @@ input[type="range"] {
   font-size: 0.78rem;
   line-height: 1.8;
   color: var(--text);
-  overflow-y: auto;
-  max-height: 280px;
 }
-
-.drawer-solution-body::-webkit-scrollbar       { width: 4px; }
-.drawer-solution-body::-webkit-scrollbar-track { background: var(--bg); }
-.drawer-solution-body::-webkit-scrollbar-thumb { background: var(--border); }
 
 .drawer-solution-body .md-h { color: #c9a0ff; }
 
@@ -961,6 +976,7 @@ input[type="range"] {
   gap: 0.5rem;
   flex: 1;
   min-height: 0;
+  padding: 1.5rem;
 }
 
 .bulk-progress-header {
@@ -993,7 +1009,8 @@ input[type="range"] {
 }
 
 .bulk-log {
-  max-height: 140px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   font-size: 0.62rem;
   line-height: 1.7;
@@ -1150,4 +1167,157 @@ input[type="range"] {
   color: var(--accent2);
   border-color: rgba(255, 107, 107, 0.35);
   background: rgba(255, 107, 107, 0.07);
+}
+
+/* ─── FILTER BAR ──────────────────────────────────────────────────────────── */
+.filter-bar {
+  position: relative;
+  padding: 0.55rem 1rem 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  z-index: 30;
+}
+
+.filter-input-wrap {
+  display: flex;
+  align-items: center;
+  background: var(--node);
+  border: 1px solid var(--border);
+  transition: border-color 0.2s;
+  gap: 0.4rem;
+  padding: 0 0.5rem;
+}
+
+.filter-input-wrap:focus-within {
+  border-color: var(--accent3);
+}
+
+.filter-icon {
+  color: var(--muted);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+  line-height: 1;
+  user-select: none;
+}
+
+.filter-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-family: 'Space Mono', monospace;
+  font-size: 0.7rem;
+  padding: 0.45rem 0;
+  min-width: 0;
+}
+
+.filter-input::placeholder { color: var(--muted); }
+
+.filter-clear {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 0.65rem;
+  cursor: pointer;
+  padding: 0.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.15s;
+}
+.filter-clear:hover { color: var(--accent2); }
+
+/* Suggestions dropdown */
+.filter-suggestions {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  top: calc(100% - 0.55rem);  /* flush below input-wrap inside the bar */
+  background: var(--surface);
+  border: 1px solid var(--accent3);
+  border-top: none;
+  z-index: 50;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.filter-suggestions::-webkit-scrollbar { width: 3px; }
+.filter-suggestions::-webkit-scrollbar-track { background: var(--bg); }
+.filter-suggestions::-webkit-scrollbar-thumb { background: var(--border); }
+
+.suggestion-item {
+  padding: 0.35rem 0.75rem;
+  font-size: 0.68rem;
+  font-family: 'Space Mono', monospace;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  transition: background 0.1s;
+}
+
+.suggestion-item:hover,
+.suggestion-item.active {
+  background: rgba(107, 203, 255, 0.1);
+  color: var(--accent3);
+}
+
+.suggestion-match { color: var(--accent3); }
+
+.suggestion-count {
+  font-size: 0.58rem;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+
+/* Active filter chips */
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  padding: 0.4rem 0 0.45rem;
+  min-height: 0;
+}
+
+.filter-chips:empty { padding: 0; }
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(107, 203, 255, 0.1);
+  border: 1px solid rgba(107, 203, 255, 0.3);
+  color: var(--accent3);
+  font-size: 0.58rem;
+  font-family: 'Space Mono', monospace;
+  padding: 0.1rem 0.4rem 0.1rem 0.5rem;
+  letter-spacing: 0.02em;
+}
+
+.filter-chip-remove {
+  background: none;
+  border: none;
+  color: var(--accent3);
+  cursor: pointer;
+  font-size: 0.6rem;
+  padding: 0;
+  line-height: 1;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+.filter-chip-remove:hover { opacity: 1; }
+
+/* Dimmed nodes on graph when filtered out */
+.node.filtered-out circle {
+  opacity: 0.12;
+  stroke-opacity: 0.12;
+}
+.node.filtered-out text {
+  opacity: 0.1;
+}
+.link.filtered-out {
+  opacity: 0.05 !important;
+  stroke-opacity: 0.05 !important;
 }

@@ -278,7 +278,12 @@ let highlightedId = null;
 
 function renderList() {
   const list = document.getElementById('problemList');
-  document.getElementById('problemCount').textContent = db.length;
+  const ids  = filteredIds();
+  const visible = db.filter(p => ids === null || ids.has(p.id));
+
+  // Count display: "12" or "4 / 12" when filtered
+  document.getElementById('problemCount').textContent =
+    ids === null ? db.length : `${visible.length} / ${db.length}`;
 
   if (db.length === 0) {
     list.innerHTML =
@@ -286,7 +291,13 @@ function renderList() {
     return;
   }
 
-  list.innerHTML = db.slice().reverse().map(p => {
+  if (visible.length === 0) {
+    list.innerHTML =
+      '<div style="padding:1.5rem;color:var(--muted);font-size:0.7rem;text-align:center">No problems match the filter</div>';
+    return;
+  }
+
+  list.innerHTML = visible.slice().reverse().map(p => {
     const tags = p.techniques
       .split(',').map(t => t.trim()).filter(Boolean)
       .map(t => `<span class="technique-tag">${t}</span>`).join('');
@@ -330,6 +341,213 @@ function highlightNode(id) {
     renderList();
     d3.selectAll('.node').classed('highlighted', d => d.id === highlightedId);
   }
+}
+
+// ─── FILTER STATE ─────────────────────────────────────────────────────────────
+let activeFilters = [];        // string[] — tags that must ALL be present
+let _suggestionIndex = -1;     // keyboard-nav cursor in suggestion list
+
+/** All unique tags across the DB, sorted alphabetically (case-insensitive). */
+function getAllTags() {
+  const set = new Set();
+  for (const p of db) {
+    p.techniques.split(',').map(t => t.trim()).filter(Boolean).forEach(t => set.add(t));
+  }
+  return [...set].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+}
+
+/** Count how many problems carry a given tag. */
+function tagCount(tag) {
+  const lo = tag.toLowerCase();
+  return db.filter(p =>
+    p.techniques.split(',').map(t => t.trim().toLowerCase()).includes(lo)
+  ).length;
+}
+
+/** Return IDs that pass the current activeFilters (all tags must match). */
+function filteredIds() {
+  if (!activeFilters.length) return null;   // null = no filter active
+  const los = activeFilters.map(t => t.toLowerCase());
+  return new Set(
+    db.filter(p => {
+      const tags = p.techniques.split(',').map(t => t.trim().toLowerCase());
+      return los.every(f => tags.includes(f));
+    }).map(p => p.id)
+  );
+}
+
+// ── Input handler ─────────────────────────────────────────────────────────────
+function onFilterInput() {
+  _suggestionIndex = -1;
+  renderSuggestions();
+  updateClearBtn();
+}
+
+function onFilterFocus() {
+  renderSuggestions();
+}
+
+function onFilterBlur() {
+  // Delay so click on a suggestion fires first
+  setTimeout(() => {
+    document.getElementById('filterSuggestions').style.display = 'none';
+    _suggestionIndex = -1;
+  }, 180);
+}
+
+function onFilterKeydown(e) {
+  const box = document.getElementById('filterSuggestions');
+  const items = box.querySelectorAll('.suggestion-item');
+
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    _suggestionIndex = Math.min(_suggestionIndex + 1, items.length - 1);
+    highlightSuggestion(items);
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    _suggestionIndex = Math.max(_suggestionIndex - 1, -1);
+    highlightSuggestion(items);
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_suggestionIndex >= 0 && items[_suggestionIndex]) {
+      items[_suggestionIndex].click();
+    } else {
+      // Commit raw text if it exactly matches a tag
+      const raw = document.getElementById('filterInput').value.trim();
+      if (raw) commitFilter(raw);
+    }
+  } else if (e.key === 'Escape') {
+    box.style.display = 'none';
+    _suggestionIndex = -1;
+  } else if (e.key === 'Backspace' && document.getElementById('filterInput').value === '') {
+    // Pop last chip on backspace with empty input
+    if (activeFilters.length) {
+      activeFilters.pop();
+      applyFilter();
+    }
+  }
+}
+
+function highlightSuggestion(items) {
+  items.forEach((el, i) => el.classList.toggle('active', i === _suggestionIndex));
+  if (_suggestionIndex >= 0) items[_suggestionIndex]?.scrollIntoView({ block: 'nearest' });
+}
+
+// ── Suggestion rendering ──────────────────────────────────────────────────────
+function renderSuggestions() {
+  const input = document.getElementById('filterInput').value.trim().toLowerCase();
+  const box   = document.getElementById('filterSuggestions');
+
+  const allTags = getAllTags().filter(t => !activeFilters.includes(t));
+
+  // Strict prefix match on lowercased tag
+  const matches = input
+    ? allTags.filter(t => t.toLowerCase().startsWith(input))
+    : allTags;
+
+  if (!matches.length) {
+    box.style.display = 'none';
+    return;
+  }
+
+  box.innerHTML = matches.map(tag => {
+    const lo    = tag.toLowerCase();
+    const count = tagCount(tag);
+    // Bold the matched prefix, normal for rest
+    const display = input
+      ? `<span class="suggestion-match">${escHtml(tag.slice(0, input.length))}</span>${escHtml(tag.slice(input.length))}`
+      : escHtml(tag);
+    return `<div class="suggestion-item" onmousedown="commitFilter('${escHtml(tag)}')">${display}<span class="suggestion-count">${count}</span></div>`;
+  }).join('');
+
+  box.style.display = 'block';
+  _suggestionIndex = -1;
+}
+
+function escHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// ── Commit a tag filter ───────────────────────────────────────────────────────
+function commitFilter(tag) {
+  // Case-insensitive dedupe: match against existing active filters
+  const lo = tag.toLowerCase();
+  const allTags = getAllTags();
+  // Find canonical casing from the tag list
+  const canonical = allTags.find(t => t.toLowerCase() === lo) || tag;
+
+  if (!activeFilters.map(t => t.toLowerCase()).includes(lo)) {
+    activeFilters.push(canonical);
+  }
+
+  document.getElementById('filterInput').value = '';
+  document.getElementById('filterSuggestions').style.display = 'none';
+  updateClearBtn();
+  applyFilter();
+}
+
+function removeFilter(tag) {
+  activeFilters = activeFilters.filter(t => t !== tag);
+  applyFilter();
+}
+
+function clearFilter() {
+  activeFilters = [];
+  document.getElementById('filterInput').value = '';
+  document.getElementById('filterSuggestions').style.display = 'none';
+  updateClearBtn();
+  applyFilter();
+}
+
+function updateClearBtn() {
+  const input = document.getElementById('filterInput').value;
+  document.getElementById('filterClear').style.display =
+    (activeFilters.length || input) ? '' : 'none';
+}
+
+// ── Apply filter: re-render list + dim graph nodes ────────────────────────────
+function applyFilter() {
+  renderChips();
+  updateClearBtn();
+  renderList();
+  applyGraphFilter();
+}
+
+function renderChips() {
+  const el = document.getElementById('filterChips');
+  el.innerHTML = activeFilters.map(tag =>
+    `<span class="filter-chip">${escHtml(tag)}<button class="filter-chip-remove" onclick="removeFilter('${escHtml(tag)}')" title="Remove filter">✕</button></span>`
+  ).join('');
+}
+
+function applyGraphFilter() {
+  if (!simulation) return;
+  const ids = filteredIds();   // null = show all
+
+  d3.selectAll('.node').each(function(d) {
+    const hidden = ids !== null && !ids.has(d.id);
+    d3.select(this).classed('filtered-out', hidden);
+  });
+
+  // Dim links where either endpoint is filtered out
+  const applyLinkFilter = (sel) => {
+    sel.each(function(d) {
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      const hidden = ids !== null && (!ids.has(srcId) || !ids.has(tgtId));
+      d3.select(this).classed('filtered-out', hidden);
+    });
+  };
+
+  if (_simLinkEl)    applyLinkFilter(_simLinkEl);
+  if (_derivedLinkEl) applyLinkFilter(_derivedLinkEl);
+  // Also mark hit-layer lines so hover guard works correctly
+  d3.selectAll('.link-hit-layer line').each(function(d) {
+    const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+    const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+    const hidden = ids !== null && (!ids.has(srcId) || !ids.has(tgtId));
+    d3.select(this).classed('filtered-out', hidden);
+  });
 }
 
 // ─── D3 FORCE GRAPH ───────────────────────────────────────────────────────────
@@ -389,9 +607,10 @@ function buildGraphData() {
 }
 
 // Live DOM references so updateLinks() can reach them without a full rebuild
-let _simLinkEl    = null;
+let _simLinkEl     = null;
+let _simHitEl      = null;
 let _derivedLinkEl = null;
-let _simNodes     = null;   // the node array currently bound to the simulation
+let _simNodes      = null;   // the node array currently bound to the simulation
 
 // ── updateLinks: recompute edges and nudge simulation — no SVG teardown ──────
 function updateLinks() {
@@ -399,15 +618,24 @@ function updateLinks() {
 
   const { simLinks, derivedLinks } = buildGraphData();
 
-  // Update edge DOM elements in-place
-  const gSim = d3.select('#graph-svg g g:nth-child(1)');
-  const gDer = d3.select('#graph-svg g g:nth-child(2)');
+  // Update edge DOM elements in-place (use stable classes, not fragile nth-child)
+  const gSim = d3.select('#graph-svg g .g-sim-links');
+  const gHit = d3.select('#graph-svg g .g-sim-hit');
+  const gDer = d3.select('#graph-svg g .g-derived-links');
 
-  _simLinkEl = gSim.selectAll('line').data(simLinks, d => `${d.source}-${d.target}`)
+  _simLinkEl = attachEdgeHover(gSim.selectAll('line').data(simLinks, d => `${d.source}-${d.target}`)
     .join('line')
       .attr('class',          'link')
       .attr('stroke-width',   d => 1 + d.sim * 5)
-      .attr('stroke-opacity', d => 0.2 + d.sim * 0.6);
+      .attr('stroke-opacity', d => 0.2 + d.sim * 0.6)
+      .style('cursor', 'crosshair'));
+
+  _simHitEl = attachEdgeHover(gHit.selectAll('line').data(simLinks, d => `${d.source}-${d.target}`)
+    .join('line')
+      .attr('stroke', 'transparent')
+      .attr('stroke-width', 12)
+      .attr('fill', 'none')
+      .style('cursor', 'crosshair'));
 
   _derivedLinkEl = gDer.selectAll('line').data(derivedLinks, d => `${d.source}-${d.target}`)
     .join('line')
@@ -430,6 +658,9 @@ function updateLinks() {
 
   // Tiny nudge so edges settle without throwing nodes around
   simulation.alpha(0.08).restart();
+
+  // Re-apply any active filter on the refreshed edges
+  applyGraphFilter();
 }
 
 function redrawGraph() {
@@ -495,14 +726,24 @@ function redrawGraph() {
     .force('collision', d3.forceCollide(22).strength(0.8));
 
   // ── Similarity links ─────────────────────────────────────────────────────────
-  _simLinkEl = g.append('g')
+  _simLinkEl = attachEdgeHover(g.append('g').attr('class', 'g-sim-links')
     .selectAll('line').data(simLinks).join('line')
       .attr('class',          'link')
       .attr('stroke-width',   d => 1 + d.sim * 5)
-      .attr('stroke-opacity', d => 0.2 + d.sim * 0.6);
+      .attr('stroke-opacity', d => 0.2 + d.sim * 0.6)
+      .style('cursor', 'crosshair'));
+
+  // Invisible fat hit lines (makes edges easy to hover, especially thin ones)
+  _simHitEl = attachEdgeHover(g.append('g')
+    .attr('class', 'link-hit-layer g-sim-hit')
+    .selectAll('line').data(simLinks).join('line')
+      .attr('stroke', 'transparent')
+      .attr('stroke-width', 12)
+      .attr('fill', 'none')
+      .style('cursor', 'crosshair'));
 
   // ── Derived (buff/nerf) links ────────────────────────────────────────────────
-  _derivedLinkEl = g.append('g')
+  _derivedLinkEl = g.append('g').attr('class', 'g-derived-links')
     .selectAll('line').data(derivedLinks).join('line')
       .attr('class', 'link link-derived')
       .attr('stroke-width',   2)
@@ -563,11 +804,17 @@ function redrawGraph() {
     _simLinkEl
       .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    _simHitEl
+      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
     _derivedLinkEl
       .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
       .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
     node.attr('transform', d => `translate(${d.x},${d.y})`);
   });
+
+  // Re-apply any active filter after graph is built
+  applyGraphFilter();
 }
 
 // ─── TOOLTIP POSITION ────────────────────────────────────────────────────────
@@ -575,6 +822,31 @@ function moveTip(event) {
   const tip = document.getElementById('tooltip');
   tip.style.left = (event.clientX + 14) + 'px';
   tip.style.top  = (event.clientY - 10) + 'px';
+}
+
+// ─── EDGE HOVER HANDLERS ─────────────────────────────────────────────────────
+function attachEdgeHover(sel) {
+  sel
+    .on('mouseover', function(event, d) {
+      // Don't show tooltip on filtered-out edges
+      if (d3.select(this).classed('filtered-out')) return;
+      const srcId = typeof d.source === 'object' ? d.source.id : d.source;
+      const tgtId = typeof d.target === 'object' ? d.target.id : d.target;
+      const simPct = (d.sim * 100).toFixed(1);
+      document.getElementById('tipId').textContent = `#${srcId} ↔ #${tgtId}`;
+      document.getElementById('tipContent').innerHTML =
+        `<span class="tip-sim">${simPct}%</span> similarity`;
+      document.getElementById('tooltip').classList.add('visible');
+      moveTip(event);
+    })
+    .on('mousemove', function(event, d) {
+      if (d3.select(this).classed('filtered-out')) return;
+      moveTip(event);
+    })
+    .on('mouseout', function() {
+      document.getElementById('tooltip').classList.remove('visible');
+    });
+  return sel;
 }
 
 // ─── PROBLEM DRAWER ───────────────────────────────────────────────────────────
@@ -991,7 +1263,7 @@ async function startBulkAdd() {
   document.getElementById('bulkModal').classList.remove('open');
   document.getElementById('panelLeft').querySelector('.panel-section').style.display = 'none';
   const progressPanel = document.getElementById('bulkProgressPanel');
-  progressPanel.style.display = 'block';
+  progressPanel.style.display = 'flex';
 
   const log      = document.getElementById('bulkLog');
   const bar      = document.getElementById('bulkProgressBar');
@@ -1091,8 +1363,10 @@ async function startBulkAdd() {
 
   _bulkRunning = false;
 
-  // Add dismiss button inside the progress panel
+  // Add dismiss button (remove any leftover from a previous run first)
+  document.getElementById('bulkDismissBtn')?.remove();
   const dismissBtn = document.createElement('button');
+  dismissBtn.id        = 'bulkDismissBtn';
   dismissBtn.className = 'btn btn-secondary';
   dismissBtn.style.cssText = 'margin-top:0.8rem;width:100%;font-size:0.65rem';
   dismissBtn.textContent = 'Dismiss';
@@ -1103,6 +1377,203 @@ async function startBulkAdd() {
   document.getElementById('bulkProgressPanel').appendChild(dismissBtn);
 }
 
+
+// ─── MD IMPORT ───────────────────────────────────────────────────────────────
+//
+// Exported .md format (produced by buildProblemMarkdown):
+//   Line 0:  `tag1`, `tag2`, `tag3`
+//   Line 1:  Feasibility: practical
+//   Line 2:  Time complexity: O(n log n)
+//   Line 3:  Space complexity: O(n)
+//   Line 4:  Additional constraints: None
+//   Line 5+: <problem statement — everything until ## Solution or --- or [[...]]>
+//
+// We stop collecting statement lines at the first of:
+//   - a line that is exactly "---"
+//   - a line starting with "## "
+//   - a line matching /^\[\[.+\]\]/  (Obsidian wiki-links)
+
+function parseProblemMarkdown(text) {
+  const lines = text.split('\n');
+  let i = 0;
+
+  // ── Tags line ──────────────────────────────────────────────────────────────
+  const tagsLine = lines[i++] || '';
+  const techniques = (tagsLine.match(/`([^`]+)`/g) || [])
+    .map(t => t.replace(/`/g, '').trim())
+    .filter(Boolean)
+    .join(', ');
+
+  // ── Constraint lines ───────────────────────────────────────────────────────
+  let feasibility  = 'practical';
+  let timeComplex  = '';
+  let spaceComplex = '';
+  let special      = 'None';
+
+  function stripPrefix(line, prefix) {
+    return line.startsWith(prefix) ? line.slice(prefix.length).trim() : null;
+  }
+
+  while (i < lines.length) {
+    const line = lines[i];
+    const feas = stripPrefix(line, 'Feasibility:');
+    const time = stripPrefix(line, 'Time complexity:');
+    const spc  = stripPrefix(line, 'Space complexity:');
+    const add  = stripPrefix(line, 'Additional constraints:');
+
+    if (feas !== null) { feasibility  = feas || 'practical';                     i++; continue; }
+    if (time !== null) { timeComplex  = time === 'N/A' ? '' : time;              i++; continue; }
+    if (spc  !== null) { spaceComplex = spc  === 'N/A' ? '' : spc;               i++; continue; }
+    if (add  !== null) { special      = add  === 'None' ? 'None' : add;          i++; continue; }
+    break;
+  }
+
+  // ── Statement (stop before solution / links) ───────────────────────────────
+  const stmtLines = [];
+  while (i < lines.length) {
+    const line = lines[i];
+    if (line === '---') break;
+    if (line.startsWith('## ')) break;
+    if (/^\[\[.+\]\]/.test(line.trim())) break;
+    stmtLines.push(line);
+    i++;
+  }
+
+  const problemText = stmtLines.join('\n').trim();
+  return { techniques, feasibility, timeComplex, spaceComplex, special, problemText };
+}
+
+async function startMdImport(fileList) {
+  if (!fileList || fileList.length === 0) return;
+
+  // Snapshot files immediately before any async work
+  const files = Array.from(fileList);
+
+  // Read and parse all files upfront
+  const parsed = [];
+  for (const file of files) {
+    try {
+      const text   = await file.text();
+      const result = parseProblemMarkdown(text);
+      parsed.push({ filename: file.name, ...result });
+    } catch (e) {
+      parsed.push({ filename: file.name, error: e.message });
+    }
+  }
+
+  // Reset input only after all reads are done so file references stay valid
+  document.getElementById('mdFileInput').value = '';
+
+  const valid = parsed.filter(p => !p.error && p.techniques);
+
+  if (valid.length === 0) {
+    const reasons = parsed.map(p =>
+      p.error          ? `${p.filename}: read error — ${p.error}` :
+      !p.techniques    ? `${p.filename}: no tags found (first line must be \`tag1\`, \`tag2\`, …)` :
+                         `${p.filename}: unknown issue`
+    ).join('\n');
+    alert('No valid .md files found.\n\n' + reasons);
+    return;
+  }
+
+  _bulkRunning = true;
+
+  // Show bulk progress panel (reused for import)
+  document.getElementById('bulkProgressHeader').textContent = '↑ Importing .md Files';
+  document.getElementById('panelLeft').querySelector('.panel-section').style.display = 'none';
+  const progressPanel = document.getElementById('bulkProgressPanel');
+  progressPanel.style.display = 'flex';
+
+  const log   = document.getElementById('bulkLog');
+  const bar   = document.getElementById('bulkProgressBar');
+  const label = document.getElementById('bulkProgressLabel');
+  log.innerHTML     = '';
+  bar.style.width   = '0%';
+  label.textContent = '';
+  label.style.color = '';
+
+  function appendLog(text, type) {
+    const line = document.createElement('div');
+    line.className = `bulk-log-line ${type}`;
+    line.textContent = text;
+    log.appendChild(line);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  // Report files that failed parsing
+  for (const p of parsed) {
+    if (p.error)            appendLog(`✗ ${p.filename} — read error: ${p.error}`, 'err');
+    else if (!p.techniques) appendLog(`⚠ ${p.filename} — no tags found, skipped`, 'warn');
+  }
+
+  let succeeded = 0;
+  let failed    = 0;
+
+  for (let i = 0; i < valid.length; i++) {
+    const p   = valid[i];
+    bar.style.width   = Math.round((i / valid.length) * 100) + '%';
+    label.textContent = `Embedding ${i + 1} / ${valid.length} — ${p.filename}`;
+
+    try {
+      const tags = p.techniques.split(',').map(t => t.trim()).filter(Boolean);
+      let tagEmbeddings = {};
+      try {
+        tagEmbeddings = await embedTags(tags);
+      } catch (e) {
+        appendLog(`⚠ ${p.filename} — embedding failed (${e.message}), similarity unavailable`, 'warn');
+      }
+
+      const id    = Date.now() + i;
+      const entry = {
+        id,
+        techniques:    p.techniques,
+        tagEmbeddings,
+        summary:       p.problemText,
+        feasibility:   p.feasibility  || 'practical',
+        timeComplex:   p.timeComplex  || '',
+        spaceComplex:  p.spaceComplex || '',
+        special:       p.special      || 'None',
+        solution:      null,
+        problemText:   p.problemText,
+        addedAt:       new Date().toISOString(),
+        derivedFromId: null,
+      };
+      db.push(entry);
+      saveDB(db);
+
+      succeeded++;
+      const snippet = p.filename.replace(/\.md$/i, '');
+      appendLog(`✓ ${snippet} — ${tags.length} tag${tags.length !== 1 ? 's' : ''}`, 'ok');
+    } catch (e) {
+      failed++;
+      appendLog(`✗ ${p.filename} — ${e.message}`, 'err');
+    }
+
+    if (i < valid.length - 1) await new Promise(r => setTimeout(r, 80));
+  }
+
+  bar.style.width   = '100%';
+  label.textContent = `Done — ${succeeded} imported, ${failed} failed out of ${valid.length} files.`;
+  label.style.color = failed > 0 ? 'var(--accent2)' : 'var(--accent)';
+
+  renderList();
+  redrawGraph();
+
+  _bulkRunning = false;
+
+  document.getElementById('bulkDismissBtn')?.remove();
+  const dismissBtn = document.createElement('button');
+  dismissBtn.id            = 'bulkDismissBtn';
+  dismissBtn.className     = 'btn btn-secondary';
+  dismissBtn.style.cssText = 'margin-top:0.8rem;width:100%;font-size:0.65rem';
+  dismissBtn.textContent   = 'Dismiss';
+  dismissBtn.onclick = () => {
+    document.getElementById('bulkProgressPanel').style.display  = 'none';
+    document.getElementById('bulkProgressHeader').textContent   = '⊞ Bulk Adding Problems';
+    document.getElementById('panelLeft').querySelector('.panel-section').style.display = '';
+  };
+  document.getElementById('bulkProgressPanel').appendChild(dismissBtn);
+}
 
 // ─── EXPORT AS ZIP ────────────────────────────────────────────────────────────
 
@@ -1118,7 +1589,7 @@ function buildProblemMarkdown(p, adjacency) {
     `Time complexity: ${p.timeComplex  || 'N/A'}`,
     `Space complexity: ${p.spaceComplex || 'N/A'}`,
     `Additional constraints: ${p.special && p.special !== 'None' ? p.special : 'None'}`,
-    p.problemText  || '_(no problem text stored)_',
+    p.summary || p.problemText  || '_(no problem text stored)_',
   ];
   if (p.solution) {
     lines.push('', '## Solution', '', p.solution);

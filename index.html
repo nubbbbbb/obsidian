@@ -87,6 +87,28 @@ e.g. Given a tree with N nodes, find the maximum XOR path between any two nodes.
           <button class="export-btn" onclick="exportCanvas()" title="Export as Obsidian canvas">↓ canvas</button>
         </div>
       </div>
+
+      <!-- Filter bar -->
+      <div class="filter-bar" id="filterBar">
+        <div class="filter-input-wrap" id="filterInputWrap">
+          <span class="filter-icon">⌕</span>
+          <input
+            type="text"
+            id="filterInput"
+            class="filter-input"
+            placeholder="filter by tag…"
+            autocomplete="off"
+            oninput="onFilterInput()"
+            onkeydown="onFilterKeydown(event)"
+            onfocus="onFilterFocus()"
+            onblur="onFilterBlur()"
+          >
+          <button class="filter-clear" id="filterClear" onclick="clearFilter()" title="Clear filter" style="display:none">✕</button>
+        </div>
+        <div class="filter-suggestions" id="filterSuggestions" style="display:none"></div>
+        <div class="filter-chips" id="filterChips"></div>
+      </div>
+
       <div class="problems-list" id="problemList"></div>
     </div>
   </aside>
@@ -109,11 +131,13 @@ e.g. Given a tree with N nodes, find the maximum XOR path between any two nodes.
     </div>
     <button class="drawer-close" onclick="closeDrawer()">✕</button>
   </div>
-  <div class="drawer-tags-row">
-    <div class="drawer-tags" id="drawerTags"></div>
-    <div class="drawer-actions" id="drawerActions"></div>
+  <div class="drawer-scroll" id="drawerScroll">
+    <div class="drawer-tags-row">
+      <div class="drawer-tags" id="drawerTags"></div>
+      <div class="drawer-actions" id="drawerActions"></div>
+    </div>
+    <div class="drawer-body" id="drawerBody"></div>
   </div>
-  <div class="drawer-body" id="drawerBody"></div>
 </div>
 
 <!-- Modify Result Modal -->
